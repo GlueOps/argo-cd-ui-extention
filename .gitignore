@@ -1,0 +1,5 @@
+extensions/otel/node_modules/
+extensions/otel/dist/
+resources/
+extension.tar.gz
+.env.local

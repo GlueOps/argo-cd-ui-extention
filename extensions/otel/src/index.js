@@ -4,8 +4,8 @@
   var DEFAULT_CONFIG = {
     extensionName: 'otel-extension',
     grafanaBaseUrl: '',
-    tempoDatasourceUid: '',
-    prometheusDatasourceUid: '',
+    tempoDatasourceUid: 'tempo',
+    prometheusDatasourceUid: 'prometheus',
     traceLookbackMinutes: 60,
     maxTraces: 20,
     requestTimeoutMs: 8000
