@@ -1,0 +1,11 @@
+{
+  "name": "otel-extension",
+  "version": "0.1.0",
+  "scripts": {
+    "build": "webpack --mode production"
+  },
+  "devDependencies": {
+    "webpack": "^5.88.0",
+    "webpack-cli": "^5.1.0"
+  }
+}

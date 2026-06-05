@@ -1,0 +1,31 @@
+name: Build and Release OTEL Extension
+
+on:
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      - run: |
+          cd extensions/otel
+          npm ci
+          npm run build
+      - run: |
+          mkdir -p resources/otel-extension
+          cp extensions/otel/dist/extensions.js resources/otel-extension/extensions.js
+          tar -czf extension.tar.gz resources/
+      - uses: softprops/action-gh-release@v1
+        with:
+          files: extension.tar.gz
+          tag_name: ${{ github.event.release.tag_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
