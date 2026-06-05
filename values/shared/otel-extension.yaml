@@ -1,0 +1,31 @@
+server:
+  extensions:
+    enabled: true
+    extensionList:
+      - name: otel-extension
+        env:
+          - name: EXTENSION_URL
+            value: "https://github.com/GlueOps/argo-cd-ui-extention/releases/download/v0.1.0/extension.tar.gz"
+          - name: EXTENSION_VERSION
+            value: "0.1.0"
+          - name: EXTENSION_ENABLED
+            value: "true"
+
+configs:
+  params:
+    server.enable.proxy.extension: "true"
+
+  rbac:
+    policy.default: role:readonly
+    policy.csv: |
+      p, role:readonly, extensions, invoke, otel-extension, allow
+      p, role:admin, extensions, invoke, otel-extension, allow
+      g, admin, role:admin
+
+  cm:
+    extension.config: |
+      extensions:
+        - name: otel-extension
+          backend:
+            services:
+              - url: http://grafana.monitoring.svc.cluster.local:3000
