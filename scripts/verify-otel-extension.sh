@@ -3,8 +3,7 @@ set -euo pipefail
 
 NAMESPACE=${NAMESPACE:-argocd}
 CLUSTER_PROFILE=${CLUSTER_PROFILE:-earth}
-EXPECTED_GRAFANA_URL=${EXPECTED_GRAFANA_URL:-https://grafana.nonprod.earth.onglueops.rocks}
-EXPECTED_VAULT_URL=${EXPECTED_VAULT_URL:-https://vault.nonprod.earth.onglueops.rocks}
+EXPECTED_OTEL_BACKEND_URL=${EXPECTED_OTEL_BACKEND_URL:-http://otel-extension-api.argocd.svc.cluster.local:8000}
 KUBE_CONTEXT=${KUBE_CONTEXT:-}
 
 if ! command -v kubectl >/dev/null 2>&1; then
@@ -69,12 +68,12 @@ else
   fail "argocd-cm extension.config missing otel-extension"
 fi
 
-# 5) extension.config contains expected grafana URL
-if echo "$ext_cfg" | grep -q "$EXPECTED_GRAFANA_URL"; then
-  pass "argocd-cm extension.config contains expected grafana URL"
+# 5) extension.config contains expected backend URL
+if echo "$ext_cfg" | grep -q "$EXPECTED_OTEL_BACKEND_URL"; then
+  pass "argocd-cm extension.config contains expected otel backend URL"
 else
-  fail "argocd-cm extension.config does not contain expected grafana URL"
-  info "Expected: $EXPECTED_GRAFANA_URL"
+  fail "argocd-cm extension.config does not contain expected otel backend URL"
+  info "Expected: $EXPECTED_OTEL_BACKEND_URL"
 fi
 
 # 6) RBAC includes invoke permissions for otel-extension
@@ -85,21 +84,11 @@ else
   fail "argocd-rbac-cm missing invoke permissions for otel-extension"
 fi
 
-# 7) external endpoint reachability checks from runner
-if command -v curl >/dev/null 2>&1; then
-  if curl -fsSL "$EXPECTED_GRAFANA_URL/api/health" >/dev/null 2>&1; then
-    pass "grafana endpoint is reachable from runner"
-  else
-    fail "grafana endpoint is not reachable from runner"
-  fi
-
-  if curl -fsSL "$EXPECTED_VAULT_URL/v1/sys/health" >/dev/null 2>&1; then
-    pass "vault endpoint is reachable from runner"
-  else
-    fail "vault endpoint is not reachable from runner"
-  fi
+# 7) backend service exists
+if kubectl -n "$NAMESPACE" get service otel-extension-api >/dev/null 2>&1; then
+  pass "otel-extension-api service exists"
 else
-  info "curl not found, skipped external reachability checks"
+  fail "otel-extension-api service not found"
 fi
 
 echo

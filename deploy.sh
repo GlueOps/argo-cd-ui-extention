@@ -2,7 +2,7 @@
 set -euo pipefail
 
 NAMESPACE=${NAMESPACE:-argocd}
-GRAFANA_BACKEND_URL=${GRAFANA_BACKEND_URL:-http://grafana.monitoring.svc.cluster.local:3000}
+OTEL_BACKEND_URL=${OTEL_BACKEND_URL:-http://otel-extension-api.argocd.svc.cluster.local:8000}
 
 if ! command -v kubectl >/dev/null 2>&1; then
   echo "kubectl is required"
@@ -27,7 +27,7 @@ kubectl -n "$NAMESPACE" patch configmap argocd-cmd-params-cm --type merge \
   -p '{"data":{"server.enable.proxy.extension":"true"}}'
 
 echo "Configure extension proxy backend"
-kubectl -n "$NAMESPACE" patch configmap argocd-cm --type merge -p "{\"data\":{\"extension.config\":\"extensions:\\n- name: otel-extension\\n  backend:\\n    services:\\n    - url: ${GRAFANA_BACKEND_URL}\\n\"}}"
+kubectl -n "$NAMESPACE" patch configmap argocd-cm --type merge -p "{\"data\":{\"extension.config\":\"extensions:\\n- name: otel-extension\\n  backend:\\n    services:\\n    - url: ${OTEL_BACKEND_URL}\\n\"}}"
 
 echo "Configure extension RBAC"
 kubectl -n "$NAMESPACE" patch configmap argocd-rbac-cm --type merge \
