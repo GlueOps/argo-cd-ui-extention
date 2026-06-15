@@ -28,4 +28,55 @@ configs:
         - name: otel-extension
           backend:
             services:
-              - url: http://grafana.monitoring.svc.cluster.local:3000
+              - url: http://otel-extension-api.argocd.svc.cluster.local:8000
+
+extraObjects:
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: otel-extension-api
+      namespace: argocd
+      labels:
+        app.kubernetes.io/name: otel-extension-api
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app.kubernetes.io/name: otel-extension-api
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: otel-extension-api
+        spec:
+          containers:
+            - name: otel-extension-api
+              image: ghcr.io/glueops/argocd-otel-extension-api:v0.1.0
+              imagePullPolicy: IfNotPresent
+              ports:
+                - name: http
+                  containerPort: 8000
+                  protocol: TCP
+              env:
+                - name: PORT
+                  value: "8000"
+                - name: PROMETHEUS_BASE_URL
+                  value: "http://kps-prometheus.glueops-core-kube-prometheus-stack.svc.cluster.local:9090"
+                - name: TEMPO_BASE_URL
+                  value: ""
+
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: otel-extension-api
+      namespace: argocd
+      labels:
+        app.kubernetes.io/name: otel-extension-api
+    spec:
+      type: ClusterIP
+      selector:
+        app.kubernetes.io/name: otel-extension-api
+      ports:
+        - name: http
+          port: 8000
+          targetPort: http
+          protocol: TCP
