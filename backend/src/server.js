@@ -13,9 +13,24 @@ function requirePositiveInt(name, fallback) {
   return n;
 }
 
+function assertInRange(name, value, min, max) {
+  if (value < min || value > max) {
+    console.error(`[FATAL] ${name} must be in range ${min}-${max}, got: ${value}`);
+    process.exit(1);
+  }
+}
+
 const PORT = requirePositiveInt('PORT', 8000);
-const LOG_LEVEL = (process.env.LOG_LEVEL || 'INFO').toUpperCase();
+assertInRange('PORT', PORT, 1, 65535);
+
+const LOG_LEVEL = (process.env.LOG_LEVEL || 'INFO').trim().toUpperCase();
+if (LOG_LEVEL !== 'INFO' && LOG_LEVEL !== 'DEBUG') {
+  console.error(`[FATAL] LOG_LEVEL must be INFO or DEBUG, got: ${JSON.stringify(process.env.LOG_LEVEL)}`);
+  process.exit(1);
+}
+
 const REQUEST_TIMEOUT_MS = requirePositiveInt('REQUEST_TIMEOUT_MS', 8000);
+assertInRange('REQUEST_TIMEOUT_MS', REQUEST_TIMEOUT_MS, 1, 2147483647);
 const PROMETHEUS_BASE_URL = (process.env.PROMETHEUS_BASE_URL || '').replace(/\/$/, '');
 const TEMPO_BASE_URL = (process.env.TEMPO_BASE_URL || '').replace(/\/$/, '');
 const TEMPO_SEARCH_PATH = (process.env.TEMPO_SEARCH_PATH || '/api/search').trim();
