@@ -2,12 +2,29 @@ const express = require('express');
 
 const app = express();
 
-const PORT = Number(process.env.PORT || 8000);
+function requirePositiveInt(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0 || !Number.isInteger(n)) {
+    console.error(`[FATAL] ${name} must be a positive integer, got: ${JSON.stringify(raw)}`);
+    process.exit(1);
+  }
+  return n;
+}
+
+const PORT = requirePositiveInt('PORT', 8000);
 const LOG_LEVEL = (process.env.LOG_LEVEL || 'INFO').toUpperCase();
-const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 8000);
+const REQUEST_TIMEOUT_MS = requirePositiveInt('REQUEST_TIMEOUT_MS', 8000);
 const PROMETHEUS_BASE_URL = (process.env.PROMETHEUS_BASE_URL || '').replace(/\/$/, '');
 const TEMPO_BASE_URL = (process.env.TEMPO_BASE_URL || '').replace(/\/$/, '');
 const TEMPO_SEARCH_PATH = process.env.TEMPO_SEARCH_PATH || '/api/search';
+
+// Guard TEMPO_SEARCH_PATH against absolute URLs (SSRF prevention)
+if (/^[a-zA-Z][a-zA-Z0-9+\-.]*:/.test(TEMPO_SEARCH_PATH)) {
+  console.error(`[FATAL] TEMPO_SEARCH_PATH must be a relative path, not an absolute URL: ${JSON.stringify(TEMPO_SEARCH_PATH)}`);
+  process.exit(1);
+}
 
 function logDebug(message, meta) {
   if (LOG_LEVEL === 'DEBUG') {
@@ -16,7 +33,12 @@ function logDebug(message, meta) {
 }
 
 function buildUrl(base, path, query) {
-  const upstream = new URL(path, `${base}/`);
+  // Reject absolute URLs in path to prevent SSRF via URL override
+  if (/^[a-zA-Z][a-zA-Z0-9+\-.]*:/.test(path)) {
+    throw new Error(`buildUrl: path must be relative, got absolute URL: ${path}`);
+  }
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  const upstream = new URL(normalizedPath, `${base}/`);
   const params = new URLSearchParams(query || {});
   upstream.search = params.toString();
   return upstream.toString();
