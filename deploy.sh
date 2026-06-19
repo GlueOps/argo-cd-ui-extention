@@ -15,6 +15,15 @@ if ! command -v npm >/dev/null 2>&1; then
   exit 1
 fi
 
+if [ -z "$_OTEL_BACKEND_URL_EXPLICIT" ]; then
+  echo "Checking otel-extension-api service exists"
+  if ! kubectl -n "$NAMESPACE" get service otel-extension-api >/dev/null 2>&1; then
+    echo "ERROR: Service 'otel-extension-api' not found in namespace '$NAMESPACE'."
+    echo "Deploy the backend first (e.g. via Helm) or set OTEL_BACKEND_URL to an existing service."
+    exit 1
+  fi
+fi
+
 echo "Building extension bundle"
 ./build.sh
 
@@ -26,15 +35,6 @@ kubectl -n "$NAMESPACE" create configmap otel-extension-tar \
 echo "Enable Argo proxy extension"
 kubectl -n "$NAMESPACE" patch configmap argocd-cmd-params-cm --type merge \
   -p '{"data":{"server.enable.proxy.extension":"true"}}'
-
-if [ -z "$_OTEL_BACKEND_URL_EXPLICIT" ]; then
-  echo "Checking otel-extension-api service exists"
-  if ! kubectl -n "$NAMESPACE" get service otel-extension-api >/dev/null 2>&1; then
-    echo "ERROR: Service 'otel-extension-api' not found in namespace '$NAMESPACE'."
-    echo "Deploy the backend first (e.g. via Helm) or set OTEL_BACKEND_URL to an existing service."
-    exit 1
-  fi
-fi
 
 echo "Configure extension proxy backend"
 kubectl -n "$NAMESPACE" patch configmap argocd-cm --type merge -p "{\"data\":{\"extension.config\":\"extensions:\\n- name: otel-extension\\n  backend:\\n    services:\\n    - url: ${OTEL_BACKEND_URL}\\n\"}}"
