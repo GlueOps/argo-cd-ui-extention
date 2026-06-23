@@ -186,6 +186,21 @@
     });
   }
 
+  function fetchLinks(config, application, headers) {
+    // Fetch context-aware links from backend
+    var url = buildExtensionUrl(config.extensionName, '/api/links');
+    return fetchJson(url, headers, config.requestTimeoutMs)
+      .then(function(payload) {
+        return {
+          categories: Array.isArray(payload.categories) ? payload.categories : [],
+          lastUpdated: payload.metadata ? payload.metadata.last_updated : null
+        };
+      })
+      .catch(function() {
+        return { categories: [], lastUpdated: null };
+      });
+  }
+
   function buildGrafanaTraceUrl(config, traceId) {
     if (!config.grafanaBaseUrl || !config.tempoDatasourceUid || !traceId) {
       return '';
@@ -206,6 +221,7 @@
       error: '',
       traces: [],
       metrics: { rate: null, errorRate: null, p99Ms: null },
+      categories: [],
       lastUpdated: null,
       config: readConfig()
     });
@@ -234,7 +250,8 @@
 
       Promise.all([
         fetchTraces(config, application, headers),
-        fetchRedMetrics(config, application, headers)
+        fetchRedMetrics(config, application, headers),
+        fetchLinks(config, application, headers)
       ]).then(function(results) {
         if (!active) {
           return;
@@ -244,6 +261,7 @@
           error: '',
           traces: results[0],
           metrics: results[1],
+          categories: results[2].categories,
           lastUpdated: new Date().toISOString(),
           config: config
         });
@@ -257,6 +275,7 @@
             error: err && err.message ? err.message : 'Observability backend unavailable',
             traces: [],
             metrics: { rate: null, errorRate: null, p99Ms: null },
+            categories: [],
             lastUpdated: null
           });
         });
@@ -343,6 +362,111 @@
     );
   }
 
+  function linksComponent(categories) {
+    if (!categories || categories.length === 0) {
+      return null;
+    }
+
+    return React.createElement('div', { style: { marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #e2e8f0' } },
+      React.createElement('div', { style: { marginBottom: '8px', fontWeight: 600, fontSize: '12px', color: '#334155' } }, 'Context Links'),
+      React.createElement('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } },
+        categories.map(function(category, idx) {
+          var links = category.links || [];
+          var isSingleLink = links.length === 1;
+          var hasLinks = links.length > 0 && category.status === 'ok';
+          
+          if (!hasLinks) {
+            return null;
+          }
+
+          if (isSingleLink) {
+            return React.createElement('a', {
+              key: idx,
+              href: links[0].url,
+              target: '_blank',
+              rel: 'noopener noreferrer',
+              style: {
+                display: 'inline-flex',
+                alignItems: 'center',
+                padding: '6px 10px',
+                backgroundColor: '#dbeafe',
+                border: '1px solid #93c5fd',
+                borderRadius: '4px',
+                color: '#1d4ed8',
+                textDecoration: 'none',
+                fontSize: '11px',
+                fontWeight: 500,
+                cursor: 'pointer',
+                transition: 'all 0.2s ease'
+              }
+            },
+              category.icon ? React.createElement('span', { style: { marginRight: '4px' } }, category.icon) : null,
+              category.label
+            );
+          }
+
+          return React.createElement('div', { key: idx, style: { position: 'relative' } },
+            React.createElement('div', {
+              style: {
+                display: 'inline-flex',
+                alignItems: 'center',
+                padding: '6px 10px',
+                backgroundColor: '#dbeafe',
+                border: '1px solid #93c5fd',
+                borderRadius: '4px',
+                color: '#1d4ed8',
+                fontSize: '11px',
+                fontWeight: 500,
+                cursor: 'pointer'
+              }
+            },
+              category.icon ? React.createElement('span', { style: { marginRight: '4px' } }, category.icon) : null,
+              category.label,
+              React.createElement('span', { style: { marginLeft: '6px', fontSize: '9px' } }, '▼')
+            ),
+            React.createElement('div', {
+              style: {
+                position: 'absolute',
+                top: '100%',
+                left: 0,
+                marginTop: '4px',
+                backgroundColor: '#ffffff',
+                border: '1px solid #e2e8f0',
+                borderRadius: '4px',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+                zIndex: 10,
+                minWidth: '150px',
+                overflow: 'hidden'
+              }
+            },
+              links.map(function(link, linkIdx) {
+                return React.createElement('a', {
+                  key: linkIdx,
+                  href: link.url,
+                  target: '_blank',
+                  rel: 'noopener noreferrer',
+                  style: {
+                    display: 'block',
+                    padding: '8px 10px',
+                    textDecoration: 'none',
+                    color: '#0f172a',
+                    fontSize: '11px',
+                    borderBottom: linkIdx < links.length - 1 ? '1px solid #f1f5f9' : 'none',
+                    backgroundColor: 'transparent',
+                    cursor: 'pointer',
+                    transition: 'background-color 0.15s'
+                  },
+                  onMouseEnter: function(e) { e.target.style.backgroundColor = '#f8fafc'; },
+                  onMouseLeave: function(e) { e.target.style.backgroundColor = 'transparent'; }
+                }, link.label || link.url);
+              })
+            )
+          );
+        })
+      )
+    );
+  }
+
   function AppView(props) {
     var application = getApplication(props);
     var appName = getApplicationName(application);
@@ -365,6 +489,7 @@
       ),
       React.createElement('div', { style: { marginBottom: '8px', fontWeight: 600, fontSize: '12px', color: '#334155' } }, 'Recent traces'),
       tracesTable(state.traces, state.config),
+      linksComponent(state.categories),
       React.createElement('div', { style: { marginTop: '8px', fontSize: '11px', color: '#64748b' } }, 'Updated: ' + formatAgo(state.lastUpdated))
     );
   }
