@@ -3,7 +3,7 @@ set -euo pipefail
 
 NAMESPACE=${NAMESPACE:-argocd}
 _OTEL_BACKEND_URL_EXPLICIT=${OTEL_BACKEND_URL:+yes}
-OTEL_BACKEND_URL=${OTEL_BACKEND_URL:-http://argocd-extension-backend-api.${NAMESPACE}.svc.cluster.local:8000}
+OTEL_BACKEND_URL=${OTEL_BACKEND_URL:-http://otel-extension-api.${NAMESPACE}.svc.cluster.local:8000}
 
 if ! command -v kubectl >/dev/null 2>&1; then
   echo "kubectl is required"
@@ -16,9 +16,9 @@ if ! command -v npm >/dev/null 2>&1; then
 fi
 
 if [ -z "$_OTEL_BACKEND_URL_EXPLICIT" ]; then
-  echo "Checking argocd-extension-backend-api service exists"
-  if ! kubectl -n "$NAMESPACE" get service argocd-extension-backend-api >/dev/null 2>&1; then
-    echo "ERROR: Service 'argocd-extension-backend-api' not found in namespace '$NAMESPACE'."
+  echo "Checking otel-extension-api service exists"
+  if ! kubectl -n "$NAMESPACE" get service otel-extension-api >/dev/null 2>&1; then
+    echo "ERROR: Service 'otel-extension-api' not found in namespace '$NAMESPACE'."
     echo "Deploy the backend first (e.g. via Helm) or set OTEL_BACKEND_URL to an existing service."
     exit 1
   fi
@@ -45,7 +45,7 @@ kubectl -n "$NAMESPACE" patch configmap argocd-rbac-cm --type merge \
 
 echo "Patch argocd-server deployment with extension installer"
 kubectl -n "$NAMESPACE" patch deployment argocd-server --type json -p '[
-  {"op":"add","path":"/spec/template/spec/initContainers/-","value":{"name":"otel-extension-installer","image":"quay.io/argoprojlabs/argocd-extension-installer:v0.0.5@sha256:27e72f047298188e2de1a73a1901013c274c4760c92f82e6e46cd5fbd0957c6b","env":[{"name":"EXTENSION_NAME","value":"otel-extension"},{"name":"EXTENSION_URL","value":"file:///extension/extension.tar.gz"},{"name":"EXTENSION_VERSION","value":"0.1.1"}],"volumeMounts":[{"name":"extensions","mountPath":"/tmp/extensions/"},{"name":"otel-extension-tar","mountPath":"/extension","readOnly":true}],"securityContext":{"runAsUser":1000,"allowPrivilegeEscalation":false}}},
+  {"op":"add","path":"/spec/template/spec/initContainers/-","value":{"name":"otel-extension-installer","image":"quay.io/argoprojlabs/argocd-extension-installer:v0.0.5@sha256:27e72f047298188e2de1a73a1901013c274c4760c92f82e6e46cd5fbd0957c6b","env":[{"name":"EXTENSION_NAME","value":"otel-extension"},{"name":"EXTENSION_URL","value":"file:///extension/extension.tar.gz"},{"name":"EXTENSION_VERSION","value":"0.1.1"},{"name":"EXTENSION_ENABLED","value":"true"}],"volumeMounts":[{"name":"extensions","mountPath":"/tmp/extensions/"},{"name":"otel-extension-tar","mountPath":"/extension","readOnly":true}],"securityContext":{"runAsUser":1000,"allowPrivilegeEscalation":false}}},
   {"op":"add","path":"/spec/template/spec/volumes/-","value":{"name":"otel-extension-tar","configMap":{"name":"otel-extension-tar"}}},
   {"op":"add","path":"/spec/template/spec/containers/0/volumeMounts/-","value":{"name":"extensions","mountPath":"/tmp/extensions/"}}
 ]'
