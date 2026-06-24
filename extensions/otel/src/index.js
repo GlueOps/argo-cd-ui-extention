@@ -506,7 +506,8 @@
       extensionsAPI.registerStatusPanelExtension(StatusPanel, 'OTEL', 'otel');
     }
     if (typeof extensionsAPI.registerAppViewExtension === 'function') {
-      extensionsAPI.registerAppViewExtension(AppView, 'Observability', 'fa-heartbeat');
+      // AppView appears as a toolbar icon in Argo CD; use a broadly supported FA icon class.
+      extensionsAPI.registerAppViewExtension(AppView, 'Observability', 'fa-chart-line');
     }
   }
 
