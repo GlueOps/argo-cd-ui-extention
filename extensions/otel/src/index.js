@@ -214,13 +214,34 @@
         categories.map(function(category, idx) {
           var links = category.links || [];
           var isSingleLink = links.length === 1;
+          var forceExpandable = category.id === 'vault-secrets' || category.id === 'deployment-config';
           var hasLinks = links.length > 0 && category.status === 'ok';
+
+          if (category.id === 'vault-secrets' && category.status === 'ok' && links.length === 0) {
+            return React.createElement('span', {
+              key: idx,
+              style: {
+                display: 'inline-flex',
+                alignItems: 'center',
+                padding: '6px 10px',
+                backgroundColor: '#f1f5f9',
+                border: '1px solid #cbd5e1',
+                borderRadius: '4px',
+                color: '#475569',
+                fontSize: '11px',
+                fontWeight: 500
+              }
+            },
+              category.icon ? React.createElement('span', { style: { marginRight: '4px' } }, category.icon) : null,
+              category.label
+            );
+          }
           
           if (!hasLinks) {
             return null;
           }
 
-          if (isSingleLink) {
+          if (isSingleLink && !forceExpandable) {
             return React.createElement('a', {
               key: idx,
               href: links[0].url,
