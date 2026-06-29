@@ -27,7 +27,7 @@ extraObjects:
         spec:
           containers:
             - name: otel-extension-api
-              image: ghcr.io/glueops/argocd-otel-extension-api:v0.1.1
+              image: ghcr.io/glueops/argocd-otel-extension-api:v0.1.1@sha256:fdadbbcc6922c99d3a39595fe1ea038062bb1a689c16d03dbd801470f05894f9
               imagePullPolicy: IfNotPresent
               ports:
                 - name: http
