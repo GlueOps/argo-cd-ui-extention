@@ -24,7 +24,7 @@ jobs:
           mkdir -p resources/otel-extension
           cp extensions/otel/dist/extensions.js resources/otel-extension/extensions.js
           tar -czf extension.tar.gz resources/
-      - uses: softprops/action-gh-release@v1
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: extension.tar.gz
           tag_name: ${{ github.event.release.tag_name }}
