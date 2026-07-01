@@ -30,30 +30,110 @@
     return (application && application.spec && application.spec.project) || 'default';
   }
 
-  function formatAgo(ts) {
-    if (!ts) {
-      return '-';
+  // Logo shown in place of the old "OTEL" header. Overridable via runtime config
+  // (window.__OTEL_EXTENSION_CONFIG__.logoUrl); defaults to the GlueOps GitHub avatar.
+  var GLUEOPS_LOGO_URL = (window.__OTEL_EXTENSION_CONFIG__ && window.__OTEL_EXTENSION_CONFIG__.logoUrl) || 'https://github.com/GlueOps.png';
+
+  // Detect the active Argo CD theme. Argo CD wraps its UI in a `.theme-dark` / `.theme-light`
+  // element; fall back to the OS preference when neither is present.
+  function detectTheme() {
+    try {
+      if (document.querySelector('.theme-dark')) {
+        return 'dark';
+      }
+      if (document.querySelector('.theme-light')) {
+        return 'light';
+      }
+    } catch (err) {
+      // Ignore DOM access failures.
+    }
+    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+      return 'dark';
+    }
+    return 'light';
+  }
+
+  // Track the theme reactively so the panel re-colors when the user toggles dark/light.
+  function useArgoTheme() {
+    var _React$useState = React.useState(detectTheme());
+    var theme = _React$useState[0];
+    var setTheme = _React$useState[1];
+
+    React.useEffect(function() {
+      var update = function() { setTheme(detectTheme()); };
+      var observer = new MutationObserver(update);
+      try {
+        observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+        if (document.body) {
+          observer.observe(document.body, { attributes: true, attributeFilter: ['class'], subtree: true });
+        }
+      } catch (err) {
+        // Ignore observe failures.
+      }
+      update();
+      return function() { observer.disconnect(); };
+    }, []);
+
+    return theme;
+  }
+
+  function getPalette(theme) {
+    if (theme === 'dark') {
+      return {
+        panelBg: 'transparent',
+        panelBorder: '1px solid rgba(255, 255, 255, 0.14)',
+        heading: '#dce3e8',
+        muted: '#8fa3b0',
+        loading: '#6cb1ff',
+        warn: '#e0a458',
+        chipBg: 'rgba(108, 177, 255, 0.12)',
+        chipBorder: '1px solid rgba(108, 177, 255, 0.35)',
+        chipText: '#6cb1ff',
+        neutralChipBg: 'rgba(255, 255, 255, 0.06)',
+        neutralChipBorder: '1px solid rgba(255, 255, 255, 0.16)',
+        neutralChipText: '#b8c4ce',
+        menuBg: '#1f2933',
+        menuBorder: '1px solid rgba(255, 255, 255, 0.14)',
+        menuItemText: '#dce3e8',
+        menuDivider: '1px solid rgba(255, 255, 255, 0.08)'
+      };
+    }
+    return {
+      panelBg: 'transparent',
+      panelBorder: '1px solid #dbeafe',
+      heading: '#334155',
+      muted: '#64748b',
+      loading: '#1d4ed8',
+      warn: '#b45309',
+      chipBg: '#dbeafe',
+      chipBorder: '1px solid #93c5fd',
+      chipText: '#1d4ed8',
+      neutralChipBg: '#f1f5f9',
+      neutralChipBorder: '1px solid #cbd5e1',
+      neutralChipText: '#475569',
+      menuBg: '#ffffff',
+      menuBorder: '1px solid #e2e8f0',
+      menuItemText: '#0f172a',
+      menuDivider: '1px solid #f1f5f9'
+    };
+  }
+
+  // GlueOps logo with a graceful text fallback if the image can't load (e.g. CSP/offline).
+  function GlueOpsLogo() {
+    var _React$useState = React.useState(false);
+    var failed = _React$useState[0];
+    var setFailed = _React$useState[1];
+
+    if (failed) {
+      return React.createElement('span', { style: { fontWeight: 700, fontSize: '13px', letterSpacing: '0.2px', color: 'inherit' } }, 'GlueOps');
     }
 
-    var now = Date.now();
-    var then = new Date(ts).getTime();
-    if (Number.isNaN(then)) {
-      return '-';
-    }
-
-    var seconds = Math.max(0, Math.floor((now - then) / 1000));
-    if (seconds < 60) {
-      return 'just now';
-    }
-    var minutes = Math.floor(seconds / 60);
-    if (minutes < 60) {
-      return minutes + 'm ago';
-    }
-    var hours = Math.floor(minutes / 60);
-    if (hours < 24) {
-      return hours + 'h ago';
-    }
-    return Math.floor(hours / 24) + 'd ago';
+    return React.createElement('img', {
+      src: GLUEOPS_LOGO_URL,
+      alt: 'GlueOps',
+      style: { height: '20px', width: 'auto', display: 'block' },
+      onError: function() { setFailed(true); }
+    });
   }
 
   function buildExtensionUrl(extensionName, path) {
@@ -183,33 +263,33 @@
   function StatusPanel(props) {
     var application = getApplication(props);
     var appName = getApplicationName(application);
+    var theme = useArgoTheme();
+    var palette = getPalette(theme);
     var state = useOtelData(application);
 
     if (!appName) {
-      return React.createElement('div', { style: { padding: '8px', fontSize: '12px', color: '#64748b' } }, 'OTEL: app not found');
+      return React.createElement('div', { style: { padding: '8px', fontSize: '12px', color: palette.muted } }, 'Application context not available');
     }
 
     return React.createElement(
       'div',
-      { style: { padding: '8px', border: '1px solid #dbeafe', borderRadius: '6px', backgroundColor: '#ffffff' } },
-      React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', fontSize: '11px', marginBottom: '8px', color: '#475569' } },
-        React.createElement('span', { style: { fontWeight: 700 } }, 'OTEL'),
-        React.createElement('span', null, 'v' + __EXTENSION_VERSION__)
+      { style: { padding: '8px', border: palette.panelBorder, borderRadius: '6px', backgroundColor: palette.panelBg, color: 'inherit' } },
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', marginBottom: '8px' } },
+        React.createElement(GlueOpsLogo, null)
       ),
-      state.loading && React.createElement('div', { style: { fontSize: '12px', color: '#1d4ed8' } }, 'Loading links...'),
-      !state.loading && state.error && React.createElement('div', { style: { fontSize: '12px', color: '#b45309' } }, 'Observability unavailable'),
-      !state.loading && !state.error && linksComponent(state.categories),
-      React.createElement('div', { style: { marginTop: '8px', fontSize: '10px', color: '#64748b' } }, 'Updated: ' + formatAgo(state.lastUpdated))
+      state.loading && React.createElement('div', { style: { fontSize: '12px', color: palette.loading } }, 'Loading links...'),
+      !state.loading && state.error && React.createElement('div', { style: { fontSize: '12px', color: palette.warn } }, 'Observability unavailable'),
+      !state.loading && !state.error && linksComponent(state.categories, palette)
     );
   }
 
-  function linksComponent(categories) {
+  function linksComponent(categories, palette) {
     if (!categories || categories.length === 0) {
       return null;
     }
 
     return React.createElement('div', { style: { marginTop: '8px' } },
-      React.createElement('div', { style: { marginBottom: '8px', fontWeight: 600, fontSize: '12px', color: '#334155' } }, 'Context Links'),
+      React.createElement('div', { style: { marginBottom: '8px', fontWeight: 600, fontSize: '12px', color: palette.heading } }, 'Context Links'),
       React.createElement('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } },
         categories.map(function(category, idx) {
           var links = category.links || [];
@@ -224,10 +304,10 @@
                 display: 'inline-flex',
                 alignItems: 'center',
                 padding: '6px 10px',
-                backgroundColor: '#f1f5f9',
-                border: '1px solid #cbd5e1',
+                backgroundColor: palette.neutralChipBg,
+                border: palette.neutralChipBorder,
                 borderRadius: '4px',
-                color: '#475569',
+                color: palette.neutralChipText,
                 fontSize: '11px',
                 fontWeight: 500
               }
@@ -236,7 +316,7 @@
               category.label
             );
           }
-          
+
           if (!hasLinks) {
             return null;
           }
@@ -251,10 +331,10 @@
                 display: 'inline-flex',
                 alignItems: 'center',
                 padding: '6px 10px',
-                backgroundColor: '#dbeafe',
-                border: '1px solid #93c5fd',
+                backgroundColor: palette.chipBg,
+                border: palette.chipBorder,
                 borderRadius: '4px',
-                color: '#1d4ed8',
+                color: palette.chipText,
                 textDecoration: 'none',
                 fontSize: '11px',
                 fontWeight: 500,
@@ -272,10 +352,10 @@
               style: {
                 display: 'inline-flex',
                 padding: '6px 10px',
-                backgroundColor: '#dbeafe',
-                border: '1px solid #93c5fd',
+                backgroundColor: palette.chipBg,
+                border: palette.chipBorder,
                 borderRadius: '4px',
-                color: '#1d4ed8',
+                color: palette.chipText,
                 fontSize: '11px',
                 fontWeight: 500
               }
@@ -285,7 +365,7 @@
                 category.label,
                 React.createElement('span', { style: { marginLeft: '6px', fontSize: '9px' } }, '▼')
               ),
-              React.createElement('div', { style: { marginTop: '6px', backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '4px', overflow: 'hidden', minWidth: '220px' } },
+              React.createElement('div', { style: { marginTop: '6px', backgroundColor: palette.menuBg, border: palette.menuBorder, borderRadius: '4px', overflow: 'hidden', minWidth: '220px' } },
               links.map(function(link, linkIdx) {
                 return React.createElement('a', {
                   key: linkIdx,
@@ -296,9 +376,9 @@
                     display: 'block',
                     padding: '8px 10px',
                     textDecoration: 'none',
-                    color: '#0f172a',
+                    color: palette.menuItemText,
                     fontSize: '11px',
-                    borderBottom: linkIdx < links.length - 1 ? '1px solid #f1f5f9' : 'none',
+                    borderBottom: linkIdx < links.length - 1 ? palette.menuDivider : 'none',
                     backgroundColor: 'transparent',
                     cursor: 'pointer'
                   }
@@ -320,7 +400,7 @@
     var extensionsAPI = window.extensionsAPI;
 
     if (typeof extensionsAPI.registerStatusPanelExtension === 'function') {
-      extensionsAPI.registerStatusPanelExtension(StatusPanel, 'OTEL', 'otel');
+      extensionsAPI.registerStatusPanelExtension(StatusPanel, 'GlueOps', 'otel');
     }
   }
 
