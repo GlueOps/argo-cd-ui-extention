@@ -169,11 +169,14 @@
     return '/extensions/' + extensionName + path;
   }
 
-  function buildHeaders(application) {
+  // Takes the already-derived identity primitives (not the raw application
+  // object) so callers depend only on those values -- keeps effect dependency
+  // arrays honest and re-reads the token fresh on every call.
+  function buildHeaders(appNamespace, appName, projectName) {
     var headers = new Headers();
     headers.set('Accept', 'application/json');
-    headers.set('Argocd-Application-Name', getApplicationNamespace(application) + ':' + getApplicationName(application));
-    headers.set('Argocd-Project-Name', getProjectName(application));
+    headers.set('Argocd-Application-Name', appNamespace + ':' + appName);
+    headers.set('Argocd-Project-Name', projectName);
 
     try {
       var token = window.localStorage.getItem('argocd.token');
@@ -210,7 +213,7 @@
     });
   }
 
-  function fetchLinks(config, application, headers) {
+  function fetchLinks(config, headers) {
     // Fetch context-aware links from backend
     var url = buildExtensionUrl(config.extensionName, '/api/links');
     return fetchJson(url, headers, config.requestTimeoutMs)
@@ -250,13 +253,13 @@
 
       var active = true;
       var config = readConfig();
-      var headers = buildHeaders(application);
+      var headers = buildHeaders(appNamespace, appName, projectName);
 
       setState(function(prev) {
         return Object.assign({}, prev, { loading: true, error: '', config: config });
       });
 
-      fetchLinks(config, application, headers).then(function(result) {
+      fetchLinks(config, headers).then(function(result) {
         if (!active) {
           return;
         }

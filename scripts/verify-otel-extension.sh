@@ -3,7 +3,7 @@ set -euo pipefail
 
 NAMESPACE=${NAMESPACE:-argocd}
 CLUSTER_PROFILE=${CLUSTER_PROFILE:-earth}
-EXPECTED_OTEL_BACKEND_URL=${EXPECTED_OTEL_BACKEND_URL:-http://otel-extension-api.${NAMESPACE}.svc.cluster.local:8000}
+EXPECTED_OTEL_BACKEND_URL=${EXPECTED_OTEL_BACKEND_URL:-http://argocd-extension-backend-api.${NAMESPACE}.svc.cluster.local:8000}
 KUBE_CONTEXT=${KUBE_CONTEXT:-}
 
 if ! command -v kubectl >/dev/null 2>&1; then
@@ -85,10 +85,10 @@ else
 fi
 
 # 7) backend service exists
-if kubectl -n "$NAMESPACE" get service otel-extension-api >/dev/null 2>&1; then
-  pass "otel-extension-api service exists"
+if kubectl -n "$NAMESPACE" get service argocd-extension-backend-api >/dev/null 2>&1; then
+  pass "argocd-extension-backend-api service exists"
 else
-  fail "otel-extension-api service not found"
+  fail "argocd-extension-backend-api service not found"
 fi
 
 echo
