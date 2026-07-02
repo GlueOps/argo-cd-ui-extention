@@ -3,7 +3,7 @@ set -euo pipefail
 
 NAMESPACE=${NAMESPACE:-argocd}
 _OTEL_BACKEND_URL_EXPLICIT=${OTEL_BACKEND_URL:+yes}
-OTEL_BACKEND_URL=${OTEL_BACKEND_URL:-http://otel-extension-api.${NAMESPACE}.svc.cluster.local:8000}
+OTEL_BACKEND_URL=${OTEL_BACKEND_URL:-http://argocd-extension-backend-api.${NAMESPACE}.svc.cluster.local:8000}
 
 if ! command -v kubectl >/dev/null 2>&1; then
   echo "kubectl is required"
@@ -16,10 +16,10 @@ if ! command -v npm >/dev/null 2>&1; then
 fi
 
 if [ -z "$_OTEL_BACKEND_URL_EXPLICIT" ]; then
-  echo "Checking otel-extension-api service exists"
-  if ! kubectl -n "$NAMESPACE" get service otel-extension-api >/dev/null 2>&1; then
-    echo "ERROR: Service 'otel-extension-api' not found in namespace '$NAMESPACE'."
-    echo "Deploy the backend first (e.g. via Helm) or set OTEL_BACKEND_URL to an existing service."
+  echo "Checking argocd-extension-backend-api service exists"
+  if ! kubectl -n "$NAMESPACE" get service argocd-extension-backend-api >/dev/null 2>&1; then
+    echo "ERROR: Service 'argocd-extension-backend-api' not found in namespace '$NAMESPACE'."
+    echo "Deploy the backend first (from GlueOps/argo-cd-extention-backend) or set OTEL_BACKEND_URL to an existing service."
     exit 1
   fi
 fi

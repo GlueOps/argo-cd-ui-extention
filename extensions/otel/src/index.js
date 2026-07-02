@@ -6,12 +6,39 @@
     requestTimeoutMs: 8000
   };
 
+  function toPositiveInt(value, fallback) {
+    var n = Number(value);
+    return Number.isFinite(n) && n > 0 ? n : fallback;
+  }
+
   function readConfig() {
     var runtime = window.__OTEL_EXTENSION_CONFIG__ || {};
     return {
       extensionName: runtime.extensionName || DEFAULT_CONFIG.extensionName,
-      requestTimeoutMs: Number(runtime.requestTimeoutMs || DEFAULT_CONFIG.requestTimeoutMs)
+      // Guard against non-numeric config: Number('fast') -> NaN, and
+      // setTimeout(fn, NaN) fires immediately, aborting every request.
+      requestTimeoutMs: toPositiveInt(runtime.requestTimeoutMs, DEFAULT_CONFIG.requestTimeoutMs)
     };
+  }
+
+  // Only allow links to navigate to http(s) or same-origin relative paths.
+  // Backend-supplied URLs are untrusted; a `javascript:`/`data:` href would
+  // execute in the Argo CD origin (XSS) when clicked.
+  function safeHref(url) {
+    if (typeof url !== 'string') {
+      return null;
+    }
+    var trimmed = url.trim();
+    if (/^https?:\/\//i.test(trimmed)) {
+      return trimmed;
+    }
+    // Same-origin absolute path only. Reject a second "/" OR "\" after the
+    // leading slash: browsers normalize "\" to "/" for special schemes, so
+    // "/\evil.com" (and "//host") resolve cross-origin -- an open redirect.
+    if (/^\/(?![/\\])/.test(trimmed)) {
+      return trimmed;
+    }
+    return null;
   }
 
   function getApplication(props) {
@@ -63,9 +90,12 @@
       var update = function() { setTheme(detectTheme()); };
       var observer = new MutationObserver(update);
       try {
+        // Argo CD toggles the `theme-*` class on the root/body element. Observe
+        // only those two nodes' class attribute -- NOT the whole subtree, which
+        // would fire the callback on every unrelated DOM class change.
         observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
         if (document.body) {
-          observer.observe(document.body, { attributes: true, attributeFilter: ['class'], subtree: true });
+          observer.observe(document.body, { attributes: true, attributeFilter: ['class'] });
         }
       } catch (err) {
         // Ignore observe failures.
@@ -140,11 +170,14 @@
     return '/extensions/' + extensionName + path;
   }
 
-  function buildHeaders(application) {
+  // Takes the already-derived identity primitives (not the raw application
+  // object) so callers depend only on those values -- keeps effect dependency
+  // arrays honest and re-reads the token fresh on every call.
+  function buildHeaders(appNamespace, appName, projectName) {
     var headers = new Headers();
     headers.set('Accept', 'application/json');
-    headers.set('Argocd-Application-Name', getApplicationNamespace(application) + ':' + getApplicationName(application));
-    headers.set('Argocd-Project-Name', getProjectName(application));
+    headers.set('Argocd-Application-Name', appNamespace + ':' + appName);
+    headers.set('Argocd-Project-Name', projectName);
 
     try {
       var token = window.localStorage.getItem('argocd.token');
@@ -181,18 +214,20 @@
     });
   }
 
-  function fetchLinks(config, application, headers) {
+  function fetchLinks(config, headers) {
     // Fetch context-aware links from backend
     var url = buildExtensionUrl(config.extensionName, '/api/links');
+    // Do NOT swallow failures here: let network/HTTP errors reject so the
+    // caller can surface "Observability unavailable" instead of an empty panel
+    // that looks identical to "this app genuinely has no links". A malformed but
+    // successful (2xx) body is tolerated as "no links", not an error.
     return fetchJson(url, headers, config.requestTimeoutMs)
       .then(function(payload) {
+        var safe = payload && typeof payload === 'object' ? payload : {};
         return {
-          categories: Array.isArray(payload.categories) ? payload.categories : [],
-          lastUpdated: payload.metadata ? payload.metadata.last_updated : null
+          categories: Array.isArray(safe.categories) ? safe.categories : [],
+          lastUpdated: safe.metadata ? safe.metadata.last_updated : null
         };
-      })
-      .catch(function() {
-        return { categories: [], lastUpdated: null };
       });
   }
 
@@ -221,13 +256,13 @@
 
       var active = true;
       var config = readConfig();
-      var headers = buildHeaders(application);
+      var headers = buildHeaders(appNamespace, appName, projectName);
 
       setState(function(prev) {
         return Object.assign({}, prev, { loading: true, error: '', config: config });
       });
 
-      fetchLinks(config, application, headers).then(function(result) {
+      fetchLinks(config, headers).then(function(result) {
         if (!active) {
           return;
         }
@@ -279,7 +314,8 @@
       ),
       state.loading && React.createElement('div', { style: { fontSize: '12px', color: palette.loading } }, 'Loading links...'),
       !state.loading && state.error && React.createElement('div', { style: { fontSize: '12px', color: palette.warn } }, 'Observability unavailable'),
-      !state.loading && !state.error && linksComponent(state.categories, palette)
+      !state.loading && !state.error && state.categories.length > 0 && linksComponent(state.categories, palette),
+      !state.loading && !state.error && state.categories.length === 0 && React.createElement('div', { style: { fontSize: '12px', color: palette.muted } }, 'No links available')
     );
   }
 
@@ -292,14 +328,18 @@
       React.createElement('div', { style: { marginBottom: '8px', fontWeight: 600, fontSize: '12px', color: palette.heading } }, 'Context Links'),
       React.createElement('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } },
         categories.map(function(category, idx) {
-          var links = category.links || [];
+          if (!category || typeof category !== 'object') {
+            return null;
+          }
+          var categoryKey = category.id || idx;
+          var links = Array.isArray(category.links) ? category.links : [];
           var isSingleLink = links.length === 1;
           var forceExpandable = category.id === 'vault-secrets' || category.id === 'deployment-config';
           var hasLinks = links.length > 0 && category.status === 'ok';
 
           if (category.id === 'vault-secrets' && category.status === 'ok' && links.length === 0) {
             return React.createElement('span', {
-              key: idx,
+              key: categoryKey,
               style: {
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -322,9 +362,13 @@
           }
 
           if (isSingleLink && !forceExpandable) {
+            var singleHref = links[0] && safeHref(links[0].url);
+            if (!singleHref) {
+              return null;
+            }
             return React.createElement('a', {
-              key: idx,
-              href: links[0].url,
+              key: categoryKey,
+              href: singleHref,
               target: '_blank',
               rel: 'noopener noreferrer',
               style: {
@@ -347,7 +391,7 @@
             );
           }
 
-          return React.createElement('div', { key: idx, style: { position: 'relative' } },
+          return React.createElement('div', { key: categoryKey, style: { position: 'relative' } },
             React.createElement('details', {
               style: {
                 display: 'inline-flex',
@@ -367,9 +411,13 @@
               ),
               React.createElement('div', { style: { marginTop: '6px', backgroundColor: palette.menuBg, border: palette.menuBorder, borderRadius: '4px', overflow: 'hidden', minWidth: '220px' } },
               links.map(function(link, linkIdx) {
+                var linkHref = link && safeHref(link.url);
+                if (!linkHref) {
+                  return null;
+                }
                 return React.createElement('a', {
-                  key: linkIdx,
-                  href: link.url,
+                  key: link.url || linkIdx,
+                  href: linkHref,
                   target: '_blank',
                   rel: 'noopener noreferrer',
                   style: {
