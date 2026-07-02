@@ -32,9 +32,10 @@
     if (/^https?:\/\//i.test(trimmed)) {
       return trimmed;
     }
-    // Same-origin absolute path, but not protocol-relative ("//host") which
-    // would change origin.
-    if (/^\/(?!\/)/.test(trimmed)) {
+    // Same-origin absolute path only. Reject a second "/" OR "\" after the
+    // leading slash: browsers normalize "\" to "/" for special schemes, so
+    // "/\evil.com" (and "//host") resolve cross-origin -- an open redirect.
+    if (/^\/(?![/\\])/.test(trimmed)) {
       return trimmed;
     }
     return null;
@@ -216,15 +217,17 @@
   function fetchLinks(config, headers) {
     // Fetch context-aware links from backend
     var url = buildExtensionUrl(config.extensionName, '/api/links');
+    // Do NOT swallow failures here: let network/HTTP errors reject so the
+    // caller can surface "Observability unavailable" instead of an empty panel
+    // that looks identical to "this app genuinely has no links". A malformed but
+    // successful (2xx) body is tolerated as "no links", not an error.
     return fetchJson(url, headers, config.requestTimeoutMs)
       .then(function(payload) {
+        var safe = payload && typeof payload === 'object' ? payload : {};
         return {
-          categories: Array.isArray(payload.categories) ? payload.categories : [],
-          lastUpdated: payload.metadata ? payload.metadata.last_updated : null
+          categories: Array.isArray(safe.categories) ? safe.categories : [],
+          lastUpdated: safe.metadata ? safe.metadata.last_updated : null
         };
-      })
-      .catch(function() {
-        return { categories: [], lastUpdated: null };
       });
   }
 
@@ -311,7 +314,8 @@
       ),
       state.loading && React.createElement('div', { style: { fontSize: '12px', color: palette.loading } }, 'Loading links...'),
       !state.loading && state.error && React.createElement('div', { style: { fontSize: '12px', color: palette.warn } }, 'Observability unavailable'),
-      !state.loading && !state.error && linksComponent(state.categories, palette)
+      !state.loading && !state.error && state.categories.length > 0 && linksComponent(state.categories, palette),
+      !state.loading && !state.error && state.categories.length === 0 && React.createElement('div', { style: { fontSize: '12px', color: palette.muted } }, 'No links available')
     );
   }
 
