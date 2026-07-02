@@ -2,7 +2,7 @@
 set -euo pipefail
 
 NAMESPACE=${NAMESPACE:-argocd}
-CLUSTER_PROFILE=${CLUSTER_PROFILE:-earth}
+CLUSTER_PROFILE=${CLUSTER_PROFILE:-venus}
 EXPECTED_OTEL_BACKEND_URL=${EXPECTED_OTEL_BACKEND_URL:-http://argocd-extension-backend-api.${NAMESPACE}.svc.cluster.local:8000}
 KUBE_CONTEXT=${KUBE_CONTEXT:-}
 
