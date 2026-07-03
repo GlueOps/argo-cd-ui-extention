@@ -8,6 +8,11 @@
 
   function toPositiveInt(value, fallback) {
     var n = Number(value);
+    // Require a positive *integer*: a fractional value like 0.5 would make
+    // setTimeout(fn, 0.5) fire almost immediately -- the same near-instant-abort
+    // failure mode we reject NaN/invalid config for. Round toward zero so a
+    // benign "8000.0" still works, then re-check it stayed positive.
+    n = Math.floor(n);
     return Number.isFinite(n) && n > 0 ? n : fallback;
   }
 

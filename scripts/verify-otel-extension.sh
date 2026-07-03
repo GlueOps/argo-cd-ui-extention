@@ -3,8 +3,33 @@ set -euo pipefail
 
 NAMESPACE=${NAMESPACE:-argocd}
 CLUSTER_PROFILE=${CLUSTER_PROFILE:-venus}
-EXPECTED_OTEL_BACKEND_URL=${EXPECTED_OTEL_BACKEND_URL:-http://argocd-extension-backend-api.${NAMESPACE}.svc.cluster.local:8000}
+
+# The backend Service can live in a DIFFERENT namespace than the argocd
+# control-plane: the venus profile runs it in glueops-core, not argocd. Derive the
+# default expected URL from the profile (override EXPECTED_OTEL_BACKEND_URL directly
+# for anything else) instead of assuming the backend shares $NAMESPACE.
+case "$CLUSTER_PROFILE" in
+  venus) DEFAULT_BACKEND_NAMESPACE="glueops-core" ;;
+  *)     DEFAULT_BACKEND_NAMESPACE="$NAMESPACE" ;;
+esac
+EXPECTED_OTEL_BACKEND_URL=${EXPECTED_OTEL_BACKEND_URL:-http://argocd-extension-backend-api.${DEFAULT_BACKEND_NAMESPACE}.svc.cluster.local:8000}
 KUBE_CONTEXT=${KUBE_CONTEXT:-}
+
+# Parse the backend Service name + namespace out of the expected in-cluster URL
+# (http(s)://<svc>.<ns>.svc.cluster.local:port) so the Service existence check
+# targets the namespace the backend actually runs in -- not the control-plane
+# $NAMESPACE. Falls back to the control-plane namespace if the URL isn't the
+# standard cluster-DNS form.
+backend_authority=${EXPECTED_OTEL_BACKEND_URL#*://}
+backend_authority=${backend_authority%%:*}
+backend_authority=${backend_authority%.svc.cluster.local}
+BACKEND_SERVICE=${backend_authority%%.*}
+BACKEND_NAMESPACE=${backend_authority#*.}
+BACKEND_NAMESPACE=${BACKEND_NAMESPACE%%.*}
+if [ -z "$BACKEND_SERVICE" ] || [ -z "$BACKEND_NAMESPACE" ] || [ "$BACKEND_SERVICE" = "$BACKEND_NAMESPACE" ]; then
+  BACKEND_SERVICE="argocd-extension-backend-api"
+  BACKEND_NAMESPACE="$NAMESPACE"
+fi
 
 if ! command -v kubectl >/dev/null 2>&1; then
   echo "kubectl is required"
@@ -19,6 +44,7 @@ current_context=$(kubectl config current-context)
 echo "Context: $current_context"
 echo "Namespace: $NAMESPACE"
 echo "Profile: $CLUSTER_PROFILE"
+echo "Backend service: $BACKEND_SERVICE (namespace $BACKEND_NAMESPACE)"
 
 pass_count=0
 fail_count=0
@@ -84,11 +110,12 @@ else
   fail "argocd-rbac-cm missing invoke permissions for otel-extension"
 fi
 
-# 7) backend service exists
-if kubectl -n "$NAMESPACE" get service argocd-extension-backend-api >/dev/null 2>&1; then
-  pass "argocd-extension-backend-api service exists"
+# 7) backend service exists (in the namespace parsed from the expected URL, which
+#    may differ from the argocd control-plane namespace -- e.g. glueops-core on venus)
+if kubectl -n "$BACKEND_NAMESPACE" get service "$BACKEND_SERVICE" >/dev/null 2>&1; then
+  pass "$BACKEND_SERVICE service exists in namespace $BACKEND_NAMESPACE"
 else
-  fail "argocd-extension-backend-api service not found"
+  fail "$BACKEND_SERVICE service not found in namespace $BACKEND_NAMESPACE"
 fi
 
 echo
