@@ -10,8 +10,9 @@
     var n = Number(value);
     // Require a positive *integer*: a fractional value like 0.5 would make
     // setTimeout(fn, 0.5) fire almost immediately -- the same near-instant-abort
-    // failure mode we reject NaN/invalid config for. Round toward zero so a
-    // benign "8000.0" still works, then re-check it stayed positive.
+    // failure mode we reject NaN/invalid config for. Round down so a benign
+    // "8000.0" still works, then re-check it stayed positive (floor of a negative
+    // or NaN can't be > 0, so it falls back).
     n = Math.floor(n);
     return Number.isFinite(n) && n > 0 ? n : fallback;
   }
@@ -342,9 +343,16 @@
           }
           var categoryKey = category.id || idx;
           var links = Array.isArray(category.links) ? category.links : [];
-          var isSingleLink = links.length === 1;
+          // Only links whose URL passes safeHref are actually renderable (unsafe
+          // ones map to null). Base renderability, single-vs-dropdown, and the
+          // divider logic on THIS list, not the raw one -- otherwise an all-unsafe
+          // category renders an empty dropdown and suppresses the fallback.
+          var safeLinks = category.status === 'ok'
+            ? links.filter(function(link) { return link && safeHref(link.url); })
+            : [];
+          var isSingleLink = safeLinks.length === 1;
           var forceExpandable = category.id === 'vault-secrets' || category.id === 'deployment-config';
-          var hasLinks = links.length > 0 && category.status === 'ok';
+          var hasLinks = safeLinks.length > 0;
 
           if (category.id === 'vault-secrets' && category.status === 'ok' && links.length === 0) {
             return React.createElement('span', {
@@ -371,10 +379,7 @@
           }
 
           if (isSingleLink && !forceExpandable) {
-            var singleHref = links[0] && safeHref(links[0].url);
-            if (!singleHref) {
-              return null;
-            }
+            var singleHref = safeHref(safeLinks[0].url);
             return React.createElement('a', {
               key: categoryKey,
               href: singleHref,
@@ -419,14 +424,10 @@
                 React.createElement('span', { style: { marginLeft: '6px', fontSize: '9px' } }, '▼')
               ),
               React.createElement('div', { style: { marginTop: '6px', backgroundColor: palette.menuBg, border: palette.menuBorder, borderRadius: '4px', overflow: 'hidden', minWidth: '220px' } },
-              links.map(function(link, linkIdx) {
-                var linkHref = link && safeHref(link.url);
-                if (!linkHref) {
-                  return null;
-                }
+              safeLinks.map(function(link, linkIdx) {
                 return React.createElement('a', {
                   key: link.url || linkIdx,
-                  href: linkHref,
+                  href: safeHref(link.url),
                   target: '_blank',
                   rel: 'noopener noreferrer',
                   style: {
@@ -435,7 +436,7 @@
                     textDecoration: 'none',
                     color: palette.menuItemText,
                     fontSize: '11px',
-                    borderBottom: linkIdx < links.length - 1 ? palette.menuDivider : 'none',
+                    borderBottom: linkIdx < safeLinks.length - 1 ? palette.menuDivider : 'none',
                     backgroundColor: 'transparent',
                     cursor: 'pointer'
                   }
