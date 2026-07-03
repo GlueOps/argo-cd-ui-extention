@@ -21,9 +21,10 @@
     };
   }
 
-  // Only allow links to navigate to http(s) or same-origin relative paths.
-  // Backend-supplied URLs are untrusted; a `javascript:`/`data:` href would
-  // execute in the Argo CD origin (XSS) when clicked.
+  // Only allow links to navigate to http(s) URLs or absolute same-origin paths
+  // (a single leading "/", e.g. "/foo"); bare relative paths and every other
+  // scheme are rejected. Backend-supplied URLs are untrusted; a `javascript:`/
+  // `data:` href would execute in the Argo CD origin (XSS) when clicked.
   function safeHref(url) {
     if (typeof url !== 'string') {
       return null;
@@ -306,6 +307,12 @@
       return React.createElement('div', { style: { padding: '8px', fontSize: '12px', color: palette.muted } }, 'Application context not available');
     }
 
+    // Render the links once so the fallback below can key off whether anything
+    // was actually renderable. linksComponent returns null both when there are no
+    // categories AND when categories exist but every one was filtered out (e.g.
+    // all non-ok/degraded status, or all URLs rejected by safeHref).
+    var linksEl = (!state.loading && !state.error) ? linksComponent(state.categories, palette) : null;
+
     return React.createElement(
       'div',
       { style: { padding: '8px', border: palette.panelBorder, borderRadius: '6px', backgroundColor: palette.panelBg, color: 'inherit' } },
@@ -314,8 +321,8 @@
       ),
       state.loading && React.createElement('div', { style: { fontSize: '12px', color: palette.loading } }, 'Loading links...'),
       !state.loading && state.error && React.createElement('div', { style: { fontSize: '12px', color: palette.warn } }, 'Observability unavailable'),
-      !state.loading && !state.error && state.categories.length > 0 && linksComponent(state.categories, palette),
-      !state.loading && !state.error && state.categories.length === 0 && React.createElement('div', { style: { fontSize: '12px', color: palette.muted } }, 'No links available')
+      !state.loading && !state.error && linksEl,
+      !state.loading && !state.error && !linksEl && React.createElement('div', { style: { fontSize: '12px', color: palette.muted } }, 'No links available')
     );
   }
 
@@ -324,10 +331,7 @@
       return null;
     }
 
-    return React.createElement('div', { style: { marginTop: '8px' } },
-      React.createElement('div', { style: { marginBottom: '8px', fontWeight: 600, fontSize: '12px', color: palette.heading } }, 'Context Links'),
-      React.createElement('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } },
-        categories.map(function(category, idx) {
+    var rendered = categories.map(function(category, idx) {
           if (!category || typeof category !== 'object') {
             return null;
           }
@@ -434,8 +438,19 @@
               })
             ))
           );
-        })
-      )
+    }).filter(function(node) { return node; });
+
+    // Every category was filtered out (all non-ok/degraded status, or every URL
+    // rejected by safeHref), so there is nothing to show. Return null and let the
+    // panel render its "No links available" fallback instead of a dangling,
+    // empty "Context Links" header.
+    if (rendered.length === 0) {
+      return null;
+    }
+
+    return React.createElement('div', { style: { marginTop: '8px' } },
+      React.createElement('div', { style: { marginBottom: '8px', fontWeight: 600, fontSize: '12px', color: palette.heading } }, 'Context Links'),
+      React.createElement('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, rendered)
     );
   }
 
