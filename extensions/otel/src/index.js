@@ -225,9 +225,11 @@
     // Fetch context-aware links from backend
     var url = buildExtensionUrl(config.extensionName, '/api/links');
     // Do NOT swallow failures here: let network/HTTP errors reject so the
-    // caller can surface "Observability unavailable" instead of an empty panel
-    // that looks identical to "this app genuinely has no links". A malformed but
-    // successful (2xx) body is tolerated as "no links", not an error.
+    // caller (useOtelData) can distinguish an outage from an empty result and
+    // set state.error. StatusPanel renders a blank/hidden panel on error today,
+    // but keeping error and "genuinely no links" as distinct states preserves
+    // that choice for the UI. A malformed but successful (2xx) body is tolerated
+    // as "no links", not an error.
     return fetchJson(url, headers, config.requestTimeoutMs)
       .then(function(payload) {
         var safe = payload && typeof payload === 'object' ? payload : {};
@@ -352,7 +354,8 @@
           // Only links whose URL passes safeHref are actually renderable (unsafe
           // ones map to null). Base renderability, single-vs-dropdown, and the
           // divider logic on THIS list, not the raw one -- otherwise an all-unsafe
-          // category renders an empty dropdown and suppresses the fallback.
+          // category renders an empty dropdown and keeps the panel visible when it
+          // should have been hidden.
           var safeLinks = category.status === 'ok'
             ? links.filter(function(link) { return link && safeHref(link.url); })
             : [];
@@ -453,9 +456,9 @@
     }).filter(function(node) { return node; });
 
     // Every category was filtered out (all non-ok/degraded status, or every URL
-    // rejected by safeHref), so there is nothing to show. Return null and let the
-    // panel render its "No links available" fallback instead of a dangling,
-    // empty "Context Links" header.
+    // rejected by safeHref), so there is nothing to show. Return null; StatusPanel
+    // treats a null result as "no renderable links" and hides the whole panel,
+    // rather than rendering a dangling, empty "Context Links" header.
     if (rendered.length === 0) {
       return null;
     }
