@@ -16,16 +16,26 @@ EXPECTED_OTEL_BACKEND_URL=${EXPECTED_OTEL_BACKEND_URL:-http://argocd-extension-b
 KUBE_CONTEXT=${KUBE_CONTEXT:-}
 
 # Parse the backend Service name + namespace out of the expected in-cluster URL
-# (http(s)://<svc>.<ns>.svc.cluster.local:port) so the Service existence check
-# targets the namespace the backend actually runs in -- not the control-plane
-# $NAMESPACE. Falls back to the control-plane namespace if the URL isn't the
-# standard cluster-DNS form.
-backend_authority=${EXPECTED_OTEL_BACKEND_URL#*://}
-backend_authority=${backend_authority%%:*}
-backend_authority=${backend_authority%.svc.cluster.local}
-BACKEND_SERVICE=${backend_authority%%.*}
-BACKEND_NAMESPACE=${backend_authority#*.}
-BACKEND_NAMESPACE=${BACKEND_NAMESPACE%%.*}
+# (http(s)://<svc>.<ns>.svc.cluster.local[:port][/path]) so the Service existence
+# check targets the namespace the backend actually runs in -- not the control-plane
+# $NAMESPACE. ONLY the standard cluster-DNS form is parsed; an external host
+# (e.g. https://grafana.example.com) or any non-cluster URL falls back to the
+# control-plane namespace instead of deriving a bogus service/namespace.
+backend_authority=${EXPECTED_OTEL_BACKEND_URL#*://}   # strip scheme
+backend_authority=${backend_authority%%/*}            # strip any /path
+backend_authority=${backend_authority%%:*}            # strip :port
+case "$backend_authority" in
+  *.svc.cluster.local)
+    backend_host=${backend_authority%.svc.cluster.local}
+    BACKEND_SERVICE=${backend_host%%.*}
+    BACKEND_NAMESPACE=${backend_host#*.}
+    BACKEND_NAMESPACE=${BACKEND_NAMESPACE%%.*}
+    ;;
+  *)
+    BACKEND_SERVICE=""
+    BACKEND_NAMESPACE=""
+    ;;
+esac
 if [ -z "$BACKEND_SERVICE" ] || [ -z "$BACKEND_NAMESPACE" ] || [ "$BACKEND_SERVICE" = "$BACKEND_NAMESPACE" ]; then
   BACKEND_SERVICE="argocd-extension-backend-api"
   BACKEND_NAMESPACE="$NAMESPACE"

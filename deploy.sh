@@ -2,8 +2,19 @@
 set -euo pipefail
 
 NAMESPACE=${NAMESPACE:-argocd}
+CLUSTER_PROFILE=${CLUSTER_PROFILE:-venus}
+
+# The backend Service can live in a DIFFERENT namespace than the argocd
+# control-plane: the venus profile runs it in glueops-core, not argocd. Derive the
+# default backend namespace from the profile so the documented
+# `install-with-helm.sh` -> `deploy.sh` flow works with defaults (override
+# OTEL_BACKEND_URL directly for anything else).
+case "$CLUSTER_PROFILE" in
+  venus) DEFAULT_BACKEND_NAMESPACE="glueops-core" ;;
+  *)     DEFAULT_BACKEND_NAMESPACE="$NAMESPACE" ;;
+esac
 _OTEL_BACKEND_URL_EXPLICIT=${OTEL_BACKEND_URL:+yes}
-OTEL_BACKEND_URL=${OTEL_BACKEND_URL:-http://argocd-extension-backend-api.${NAMESPACE}.svc.cluster.local:8000}
+OTEL_BACKEND_URL=${OTEL_BACKEND_URL:-http://argocd-extension-backend-api.${DEFAULT_BACKEND_NAMESPACE}.svc.cluster.local:8000}
 
 if ! command -v kubectl >/dev/null 2>&1; then
   echo "kubectl is required"
@@ -16,9 +27,9 @@ if ! command -v npm >/dev/null 2>&1; then
 fi
 
 if [ -z "$_OTEL_BACKEND_URL_EXPLICIT" ]; then
-  echo "Checking argocd-extension-backend-api service exists"
-  if ! kubectl -n "$NAMESPACE" get service argocd-extension-backend-api >/dev/null 2>&1; then
-    echo "ERROR: Service 'argocd-extension-backend-api' not found in namespace '$NAMESPACE'."
+  echo "Checking argocd-extension-backend-api service exists in namespace $DEFAULT_BACKEND_NAMESPACE"
+  if ! kubectl -n "$DEFAULT_BACKEND_NAMESPACE" get service argocd-extension-backend-api >/dev/null 2>&1; then
+    echo "ERROR: Service 'argocd-extension-backend-api' not found in namespace '$DEFAULT_BACKEND_NAMESPACE'."
     echo "Deploy the backend first (from GlueOps/argo-cd-extention-backend) or set OTEL_BACKEND_URL to an existing service."
     exit 1
   fi
