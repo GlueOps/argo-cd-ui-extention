@@ -309,15 +309,24 @@
     var palette = getPalette(theme);
     var state = useOtelData(application);
 
-    if (!appName) {
-      return React.createElement('div', { style: { padding: '8px', fontSize: '12px', color: palette.muted } }, 'Application context not available');
+    // Fail gracefully with a blank panel that blends into the Argo CD UI. When
+    // there is no application context, the extension is still loading, the
+    // backend is unavailable/errored, or it returned no renderable links, render
+    // NOTHING (return null) instead of a bordered box with a status message.
+    // This lets the extension be deployed ahead of -- or without -- its backend:
+    // no panel appears until real links are actually available, so a missing
+    // backend is indistinguishable from a normal app that simply has no links.
+    if (!appName || state.loading || state.error) {
+      return null;
     }
 
-    // Render the links once so the fallback below can key off whether anything
-    // was actually renderable. linksComponent returns null both when there are no
-    // categories AND when categories exist but every one was filtered out (e.g.
-    // all non-ok/degraded status, or all URLs rejected by safeHref).
-    var linksEl = (!state.loading && !state.error) ? linksComponent(state.categories, palette) : null;
+    // linksComponent returns null both when there are no categories AND when
+    // categories exist but every one was filtered out (e.g. all non-ok/degraded
+    // status, or all URLs rejected by safeHref).
+    var linksEl = linksComponent(state.categories, palette);
+    if (!linksEl) {
+      return null;
+    }
 
     return React.createElement(
       'div',
@@ -325,10 +334,7 @@
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', marginBottom: '8px' } },
         React.createElement(GlueOpsLogo, null)
       ),
-      state.loading && React.createElement('div', { style: { fontSize: '12px', color: palette.loading } }, 'Loading links...'),
-      !state.loading && state.error && React.createElement('div', { style: { fontSize: '12px', color: palette.warn } }, 'Observability unavailable'),
-      !state.loading && !state.error && linksEl,
-      !state.loading && !state.error && !linksEl && React.createElement('div', { style: { fontSize: '12px', color: palette.muted } }, 'No links available')
+      linksEl
     );
   }
 
