@@ -17,29 +17,32 @@ KUBE_CONTEXT=${KUBE_CONTEXT:-}
 
 # Parse the backend Service name + namespace out of the expected in-cluster URL
 # (http(s)://<svc>.<ns>.svc.cluster.local[:port][/path]) so the Service existence
-# check targets the namespace the backend actually runs in -- not the control-plane
-# $NAMESPACE. ONLY the standard cluster-DNS form is parsed; an external host
-# (e.g. https://grafana.example.com) or any non-cluster URL falls back to the
-# control-plane namespace instead of deriving a bogus service/namespace.
+# check (#7) targets the namespace the backend actually runs in -- not the
+# control-plane $NAMESPACE. ONLY the standard cluster-DNS form is treated as an
+# in-cluster Service. An external host (e.g. https://grafana.example.com) has no
+# Service to look up, so BACKEND_IS_CLUSTER_SERVICE stays "no" and check #7 is
+# skipped rather than failing against an unrelated default Service.
+BACKEND_IS_CLUSTER_SERVICE=no
+BACKEND_SERVICE=""
+BACKEND_NAMESPACE=""
 backend_authority=${EXPECTED_OTEL_BACKEND_URL#*://}   # strip scheme
 backend_authority=${backend_authority%%/*}            # strip any /path
 backend_authority=${backend_authority%%:*}            # strip :port
 case "$backend_authority" in
   *.svc.cluster.local)
     backend_host=${backend_authority%.svc.cluster.local}
-    BACKEND_SERVICE=${backend_host%%.*}
-    BACKEND_NAMESPACE=${backend_host#*.}
-    BACKEND_NAMESPACE=${BACKEND_NAMESPACE%%.*}
-    ;;
-  *)
-    BACKEND_SERVICE=""
-    BACKEND_NAMESPACE=""
+    svc=${backend_host%%.*}
+    ns=${backend_host#*.}
+    ns=${ns%%.*}
+    # Require distinct, non-empty <svc>.<ns> labels; a degenerate form like
+    # "foo.svc.cluster.local" (no namespace) is not a resolvable Service.
+    if [ -n "$svc" ] && [ -n "$ns" ] && [ "$svc" != "$ns" ]; then
+      BACKEND_IS_CLUSTER_SERVICE=yes
+      BACKEND_SERVICE="$svc"
+      BACKEND_NAMESPACE="$ns"
+    fi
     ;;
 esac
-if [ -z "$BACKEND_SERVICE" ] || [ -z "$BACKEND_NAMESPACE" ] || [ "$BACKEND_SERVICE" = "$BACKEND_NAMESPACE" ]; then
-  BACKEND_SERVICE="argocd-extension-backend-api"
-  BACKEND_NAMESPACE="$NAMESPACE"
-fi
 
 if ! command -v kubectl >/dev/null 2>&1; then
   echo "kubectl is required"
@@ -54,7 +57,11 @@ current_context=$(kubectl config current-context)
 echo "Context: $current_context"
 echo "Namespace: $NAMESPACE"
 echo "Profile: $CLUSTER_PROFILE"
-echo "Backend service: $BACKEND_SERVICE (namespace $BACKEND_NAMESPACE)"
+if [ "$BACKEND_IS_CLUSTER_SERVICE" = "yes" ]; then
+  echo "Backend service: $BACKEND_SERVICE (namespace $BACKEND_NAMESPACE)"
+else
+  echo "Backend service: external/non-cluster URL ($EXPECTED_OTEL_BACKEND_URL) -- Service check skipped"
+fi
 
 pass_count=0
 fail_count=0
@@ -121,8 +128,12 @@ else
 fi
 
 # 7) backend service exists (in the namespace parsed from the expected URL, which
-#    may differ from the argocd control-plane namespace -- e.g. glueops-core on venus)
-if kubectl -n "$BACKEND_NAMESPACE" get service "$BACKEND_SERVICE" >/dev/null 2>&1; then
+#    may differ from the argocd control-plane namespace -- e.g. glueops-core on venus).
+#    Skipped for an external/non-cluster EXPECTED_OTEL_BACKEND_URL: there is no
+#    in-cluster Service to look up, so a lookup would only ever be a false failure.
+if [ "$BACKEND_IS_CLUSTER_SERVICE" != "yes" ]; then
+  info "backend URL is external/non-cluster ($EXPECTED_OTEL_BACKEND_URL); skipping in-cluster Service check"
+elif kubectl -n "$BACKEND_NAMESPACE" get service "$BACKEND_SERVICE" >/dev/null 2>&1; then
   pass "$BACKEND_SERVICE service exists in namespace $BACKEND_NAMESPACE"
 else
   fail "$BACKEND_SERVICE service not found in namespace $BACKEND_NAMESPACE"
