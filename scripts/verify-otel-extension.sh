@@ -2,12 +2,15 @@
 set -euo pipefail
 
 NAMESPACE=${NAMESPACE:-argocd}
-CLUSTER_PROFILE=${CLUSTER_PROFILE:-venus}
+# Default to the generic profile so the expected URL here MATCHES the declarative
+# default in the shared values (helm-values.yaml / values/shared/otel-extension.yaml),
+# both of which put the backend in $NAMESPACE (argocd). The venus cluster runs the
+# backend in glueops-core, so verify it with CLUSTER_PROFILE=venus -- mirroring
+# values/clusters/venus.yaml. Override EXPECTED_OTEL_BACKEND_URL directly otherwise.
+CLUSTER_PROFILE=${CLUSTER_PROFILE:-default}
 
 # The backend Service can live in a DIFFERENT namespace than the argocd
-# control-plane: the venus profile runs it in glueops-core, not argocd. Derive the
-# default expected URL from the profile (override EXPECTED_OTEL_BACKEND_URL directly
-# for anything else) instead of assuming the backend shares $NAMESPACE.
+# control-plane: the venus profile runs it in glueops-core, not argocd.
 case "$CLUSTER_PROFILE" in
   venus) DEFAULT_BACKEND_NAMESPACE="glueops-core" ;;
   *)     DEFAULT_BACKEND_NAMESPACE="$NAMESPACE" ;;
@@ -31,16 +34,23 @@ backend_authority=${backend_authority%%:*}            # strip :port
 case "$backend_authority" in
   *.svc.cluster.local)
     backend_host=${backend_authority%.svc.cluster.local}
-    svc=${backend_host%%.*}
-    ns=${backend_host#*.}
-    ns=${ns%%.*}
-    # Require distinct, non-empty <svc>.<ns> labels; a degenerate form like
-    # "foo.svc.cluster.local" (no namespace) is not a resolvable Service.
-    if [ -n "$svc" ] && [ -n "$ns" ] && [ "$svc" != "$ns" ]; then
-      BACKEND_IS_CLUSTER_SERVICE=yes
-      BACKEND_SERVICE="$svc"
-      BACKEND_NAMESPACE="$ns"
-    fi
+    # A resolvable Service needs BOTH a service and a namespace label, i.e. the
+    # host has to contain a dot ("<svc>.<ns>"). The degenerate "foo.svc.cluster.local"
+    # (no namespace label -> no dot in backend_host) is not a Service. Note: a
+    # legitimate same-name Service like "grafana.grafana" DOES have a dot and is
+    # handled correctly here -- do NOT reject svc==ns.
+    case "$backend_host" in
+      *.*)
+        svc=${backend_host%%.*}
+        ns=${backend_host#*.}
+        ns=${ns%%.*}
+        if [ -n "$svc" ] && [ -n "$ns" ]; then
+          BACKEND_IS_CLUSTER_SERVICE=yes
+          BACKEND_SERVICE="$svc"
+          BACKEND_NAMESPACE="$ns"
+        fi
+        ;;
+    esac
     ;;
 esac
 

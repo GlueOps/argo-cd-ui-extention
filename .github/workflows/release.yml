@@ -4,7 +4,10 @@ name: Build and Release OTEL Extension
 # PR" that bumps extensions/otel/package.json + CHANGELOG. Merging that PR cuts a
 # GitHub release/tag, and the same run then builds and attaches the extension
 # bundle. Note: a release created by GITHUB_TOKEN does NOT trigger `on: release`
-# workflows, so the build MUST live in this job gated on `release_created`.
+# workflows, so the build MUST live in this job gated on the release output.
+# NOTE: the package lives at a non-root path (extensions/otel), so release-please
+# emits PATH-PREFIXED outputs (`extensions/otel--release_created` /
+# `extensions/otel--tag_name`), NOT the un-prefixed root-component names.
 on:
   push:
     branches:
@@ -25,26 +28,26 @@ jobs:
 
       # Everything below only runs when the release PR was just merged.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        if: ${{ steps.release.outputs.release_created }}
+        if: ${{ steps.release.outputs['extensions/otel--release_created'] }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        if: ${{ steps.release.outputs.release_created }}
+        if: ${{ steps.release.outputs['extensions/otel--release_created'] }}
         with:
           node-version: '24'
-      - if: ${{ steps.release.outputs.release_created }}
+      - if: ${{ steps.release.outputs['extensions/otel--release_created'] }}
         run: |
           cd extensions/otel
           npm ci
           npm run build
-      - if: ${{ steps.release.outputs.release_created }}
+      - if: ${{ steps.release.outputs['extensions/otel--release_created'] }}
         run: |
           mkdir -p resources/otel-extension
           cp extensions/otel/dist/extensions.js resources/otel-extension/extensions.js
           tar -czf extension.tar.gz resources/
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
-        if: ${{ steps.release.outputs.release_created }}
+        if: ${{ steps.release.outputs['extensions/otel--release_created'] }}
         with:
           files: extension.tar.gz
-          tag_name: ${{ steps.release.outputs.tag_name }}
+          tag_name: ${{ steps.release.outputs['extensions/otel--tag_name'] }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       # The backend was moved to GlueOps/argo-cd-extention-backend (service

@@ -1,14 +1,25 @@
 #!/bin/bash
 set -euo pipefail
 
+# PREREQUISITE: the backend now lives in GlueOps/argo-cd-extention-backend
+# (Service `argocd-extension-backend-api`, port 8000). This repo ships ONLY the
+# frontend bundle -- it no longer builds or deploys a backend. The backend MUST
+# be deployed BEFORE (or alongside) this extension, or `/api/links` has no target
+# and the panel renders nothing (the frontend fails silent by design; check the
+# browser console for `[otel-extension]` warnings). The `:8000` port below is the
+# contract owned by that repo's Service -- if it changes there, update it here and
+# in the values/*.yaml files.
 NAMESPACE=${NAMESPACE:-argocd}
-CLUSTER_PROFILE=${CLUSTER_PROFILE:-venus}
+# Default to the generic profile so the imperative default here MATCHES the
+# declarative default in the shared values (helm-values.yaml /
+# values/shared/otel-extension.yaml), both of which put the backend in $NAMESPACE
+# (argocd). The venus cluster runs the backend in glueops-core, so it overrides
+# via CLUSTER_PROFILE=venus here -- mirroring values/clusters/venus.yaml on the
+# GitOps side. Override OTEL_BACKEND_URL directly for anything else.
+CLUSTER_PROFILE=${CLUSTER_PROFILE:-default}
 
 # The backend Service can live in a DIFFERENT namespace than the argocd
-# control-plane: the venus profile runs it in glueops-core, not argocd. Derive the
-# default backend namespace from the profile so the documented
-# `install-with-helm.sh` -> `deploy.sh` flow works with defaults (override
-# OTEL_BACKEND_URL directly for anything else).
+# control-plane: the venus profile runs it in glueops-core, not argocd.
 case "$CLUSTER_PROFILE" in
   venus) DEFAULT_BACKEND_NAMESPACE="glueops-core" ;;
   *)     DEFAULT_BACKEND_NAMESPACE="$NAMESPACE" ;;

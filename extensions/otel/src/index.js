@@ -35,7 +35,11 @@
     if (typeof url !== 'string') {
       return null;
     }
-    var trimmed = url.trim();
+    // Strip tab/newline/CR anywhere in the string BEFORE the scheme/path checks:
+    // the URL parser removes U+0009/U+000A/U+000D during parsing, so "/\t/evil.com"
+    // would pass the "single leading slash" test here yet resolve to the
+    // protocol-relative "//evil.com" (cross-origin) once the browser parses it.
+    var trimmed = url.replace(/[\t\n\r]/g, '').trim();
     if (/^https?:\/\//i.test(trimmed)) {
       return trimmed;
     }
@@ -56,6 +60,14 @@
     return (application && application.metadata && application.metadata.name) || (application && application.name) || '';
   }
 
+  // NOTE: these feed the Argocd-Application-Name (`<ns>:<name>`) and
+  // Argocd-Project-Name proxy headers, which Argo CD's proxy-extension uses to
+  // AUTHORIZE the request. The 'argocd'/'default' fallbacks are only safe for the
+  // common single-namespace/default-project install; with apps-in-any-namespace or
+  // non-default AppProjects a wrong fallback yields a 403 (surfaced as a
+  // `[otel-extension]` console warning, panel stays blank). The status-panel props
+  // Argo passes do carry metadata.namespace and spec.project, so the fallbacks
+  // should not trigger in practice -- keep them only as a last resort.
   function getApplicationNamespace(application) {
     return (application && application.metadata && application.metadata.namespace) || (application && application.namespace) || 'argocd';
   }
@@ -66,7 +78,11 @@
 
   // Logo shown in place of the old "OTEL" header. Overridable via runtime config
   // (window.__OTEL_EXTENSION_CONFIG__.logoUrl); defaults to the GlueOps GitHub avatar.
-  var GLUEOPS_LOGO_URL = (window.__OTEL_EXTENSION_CONFIG__ && window.__OTEL_EXTENSION_CONFIG__.logoUrl) || 'https://github.com/GlueOps.png';
+  // Run the override through safeHref so an untrusted/misconfigured config value can't
+  // point the <img src> at an arbitrary host (beacon / Referer leak / mixed content).
+  var DEFAULT_LOGO_URL = 'https://github.com/GlueOps.png';
+  var CONFIGURED_LOGO_URL = window.__OTEL_EXTENSION_CONFIG__ && window.__OTEL_EXTENSION_CONFIG__.logoUrl;
+  var GLUEOPS_LOGO_URL = safeHref(CONFIGURED_LOGO_URL) || DEFAULT_LOGO_URL;
 
   // Detect the active Argo CD theme. Argo CD wraps its UI in a `.theme-dark` / `.theme-light`
   // element; fall back to the OS preference when neither is present.
@@ -286,6 +302,15 @@
         if (!active) {
           return;
         }
+        // The panel renders nothing on error (StatusPanel returns null) so a
+        // missing backend blends in, but a genuinely broken/misrouted/401 backend
+        // must still leave a signal for operators -- otherwise it is undiagnosable
+        // from the UI. Log it; keep the render blank.
+        try {
+          console.warn('[otel-extension] failed to load context links:', err);
+        } catch (logErr) {
+          // Ignore console failures.
+        }
         setState(function(prev) {
           return Object.assign({}, prev, {
             loading: false,
@@ -349,7 +374,9 @@
           if (!category || typeof category !== 'object') {
             return null;
           }
-          var categoryKey = category.id || idx;
+          // Suffix the index so two categories sharing an id (or a missing id)
+          // can't collide into the same React key.
+          var categoryKey = (category.id != null ? category.id : 'cat') + '-' + idx;
           var links = Array.isArray(category.links) ? category.links : [];
           // Only links whose URL passes safeHref are actually renderable (unsafe
           // ones map to null). Base renderability, single-vs-dropdown, and the
@@ -363,7 +390,10 @@
           var forceExpandable = category.id === 'vault-secrets' || category.id === 'deployment-config';
           var hasLinks = safeLinks.length > 0;
 
-          if (category.id === 'vault-secrets' && category.status === 'ok' && links.length === 0) {
+          // Gate on safeLinks (renderable), not the raw list: a vault-secrets
+          // category whose links were all rejected by safeHref should show the
+          // same "no secrets" chip as a genuinely empty one, not vanish.
+          if (category.id === 'vault-secrets' && category.status === 'ok' && safeLinks.length === 0) {
             return React.createElement('span', {
               key: categoryKey,
               style: {
@@ -435,7 +465,7 @@
               React.createElement('div', { style: { marginTop: '6px', backgroundColor: palette.menuBg, border: palette.menuBorder, borderRadius: '4px', overflow: 'hidden', minWidth: '220px' } },
               safeLinks.map(function(link, linkIdx) {
                 return React.createElement('a', {
-                  key: link.url || linkIdx,
+                  key: (link.url || 'link') + '-' + linkIdx,
                   href: safeHref(link.url),
                   target: '_blank',
                   rel: 'noopener noreferrer',
