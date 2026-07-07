@@ -77,9 +77,13 @@
   }
 
   // Logo shown in place of the old "OTEL" header. Overridable via runtime config
-  // (window.__OTEL_EXTENSION_CONFIG__.logoUrl); defaults to the GlueOps GitHub avatar.
-  // Run the override through safeHref so an untrusted/misconfigured config value can't
-  // point the <img src> at an arbitrary host (beacon / Referer leak / mixed content).
+  // (window.__OTEL_EXTENSION_CONFIG__.logoUrl); defaults to the GlueOps GitHub avatar
+  // (which is itself cross-origin). Run the override through safeHref as scheme/
+  // protocol hardening only: it rejects javascript:/data:/other non-http(s) schemes
+  // and scheme-relative ("//host") tricks, falling back to the default when the value
+  // is unusable. NOTE: safeHref allows ANY http(s) host -- this is NOT a same-origin
+  // or host allowlist, so a configured http(s) logoUrl can still load cross-origin
+  // (as the default github.com avatar already does).
   var DEFAULT_LOGO_URL = 'https://github.com/GlueOps.png';
   var CONFIGURED_LOGO_URL = window.__OTEL_EXTENSION_CONFIG__ && window.__OTEL_EXTENSION_CONFIG__.logoUrl;
   var GLUEOPS_LOGO_URL = safeHref(CONFIGURED_LOGO_URL) || DEFAULT_LOGO_URL;
