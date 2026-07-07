@@ -255,7 +255,11 @@
         var safe = payload && typeof payload === 'object' ? payload : {};
         return {
           categories: Array.isArray(safe.categories) ? safe.categories : [],
-          lastUpdated: safe.metadata ? safe.metadata.last_updated : null
+          lastUpdated: safe.metadata ? safe.metadata.last_updated : null,
+          // The backend flags best-effort/guessed results via top-level
+          // status: 'degraded' + warnings[]. Surface them so the user knows the
+          // links below may be inferred rather than confirmed.
+          warnings: Array.isArray(safe.warnings) ? safe.warnings : []
         };
       });
   }
@@ -265,6 +269,7 @@
       loading: true,
       error: '',
       categories: [],
+      warnings: [],
       lastUpdated: null,
       config: readConfig()
     });
@@ -299,6 +304,7 @@
           loading: false,
           error: '',
           categories: result.categories,
+          warnings: result.warnings || [],
           lastUpdated: result.lastUpdated || new Date().toISOString(),
           config: config
         });
@@ -359,13 +365,26 @@
       return null;
     }
 
+    // Surface backend warnings[] (e.g. "workload names could not be discovered ...",
+    // "application targets a remote cluster ...") as a small notice so a degraded
+    // response is explained rather than looking like a normal one with fewer links.
+    var warnings = Array.isArray(state.warnings) ? state.warnings : [];
+    var warningsEl = warnings.length === 0 ? null : React.createElement(
+      'div',
+      { style: { marginTop: '8px', fontSize: '10px', color: palette.neutralChipText, opacity: 0.85 } },
+      warnings.map(function(w, i) {
+        return React.createElement('div', { key: 'warn-' + i }, '⚠ ' + w);
+      })
+    );
+
     return React.createElement(
       'div',
       { style: { padding: '8px', border: palette.panelBorder, borderRadius: '6px', backgroundColor: palette.panelBg, color: 'inherit' } },
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', marginBottom: '8px' } },
         React.createElement(GlueOpsLogo, null)
       ),
-      linksEl
+      linksEl,
+      warningsEl
     );
   }
 
@@ -382,17 +401,30 @@
           // can't collide into the same React key.
           var categoryKey = (category.id != null ? category.id : 'cat') + '-' + idx;
           var links = Array.isArray(category.links) ? category.links : [];
+          // 'degraded' means the backend discovered workloads by best-effort guess
+          // (e.g. status.resources[] was empty). The links still point somewhere
+          // useful, so render them like 'ok' but mark them as inferred -- previously
+          // any non-'ok' status hid the whole category, silently dropping links a
+          // user could still follow.
+          var renderableStatus = category.status === 'ok' || category.status === 'degraded';
+          var isDegraded = category.status === 'degraded';
           // Only links whose URL passes safeHref are actually renderable (unsafe
           // ones map to null). Base renderability, single-vs-dropdown, and the
           // divider logic on THIS list, not the raw one -- otherwise an all-unsafe
           // category renders an empty dropdown and keeps the panel visible when it
           // should have been hidden.
-          var safeLinks = category.status === 'ok'
+          var safeLinks = renderableStatus
             ? links.filter(function(link) { return link && safeHref(link.url); })
             : [];
           var isSingleLink = safeLinks.length === 1;
           var forceExpandable = category.id === 'vault-secrets' || category.id === 'deployment-config';
           var hasLinks = safeLinks.length > 0;
+          // Backend moved the secret count out of the label into a `count` field;
+          // re-append it (and mark inferred categories) so the chip is as
+          // informative as before without expanding it.
+          var countSuffix = typeof category.count === 'number' ? ' (' + category.count + ')' : '';
+          var categoryLabel = (category.label || '') + countSuffix + (isDegraded ? ' ~' : '');
+          var degradedTitle = isDegraded ? 'Workload could not be confirmed; these links are a best-effort guess' : undefined;
 
           // Gate on safeLinks (renderable), not the raw list: a vault-secrets
           // category whose links were all rejected by safeHref should show the
@@ -428,6 +460,7 @@
               href: singleHref,
               target: '_blank',
               rel: 'noopener noreferrer',
+              title: degradedTitle,
               style: {
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -440,11 +473,12 @@
                 fontSize: '11px',
                 fontWeight: 500,
                 cursor: 'pointer',
+                opacity: isDegraded ? 0.75 : 1,
                 transition: 'all 0.2s ease'
               }
             },
               category.icon ? React.createElement('span', { style: { marginRight: '4px' } }, category.icon) : null,
-              category.label
+              categoryLabel
             );
           }
 
@@ -461,9 +495,9 @@
                 fontWeight: 500
               }
             },
-              React.createElement('summary', { style: { cursor: 'pointer', listStyle: 'none' } },
+              React.createElement('summary', { title: degradedTitle, style: { cursor: 'pointer', listStyle: 'none', opacity: isDegraded ? 0.75 : 1 } },
                 category.icon ? React.createElement('span', { style: { marginRight: '4px' } }, category.icon) : null,
-                category.label,
+                categoryLabel,
                 React.createElement('span', { style: { marginLeft: '6px', fontSize: '9px' } }, '▼')
               ),
               React.createElement('div', { style: { marginTop: '6px', backgroundColor: palette.menuBg, border: palette.menuBorder, borderRadius: '4px', overflow: 'hidden', minWidth: '220px' } },
