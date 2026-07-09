@@ -445,7 +445,7 @@
               }
             },
               category.icon ? React.createElement('span', { style: { marginRight: '4px' } }, category.icon) : null,
-              category.label
+              categoryLabel
             );
           }
 
