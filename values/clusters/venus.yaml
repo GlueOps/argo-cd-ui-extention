@@ -6,6 +6,13 @@ configs:
           backend:
             services:
               # Backend is deployed from GlueOps/argo-cd-extention-backend
-              # (service argocd-extension-backend-api, namespace glueops-core),
-              # which implements /api/links. This repo no longer ships a backend.
-              - url: http://argocd-extension-backend-api.glueops-core.svc.cluster.local:8000
+              # (service argocd-extension-backend-api), which implements /api/links.
+              # This repo no longer ships a backend.
+              #
+              # Namespace is glueops-core-argocd-extension-backend, NOT glueops-core:
+              # on venus the backend comes from the platform chart
+              # (platform-helm-chart-platform/templates/application-argocd-extension-backend.yaml),
+              # whose Application destination namespace is the value below. That is a
+              # different path from the repo's standalone manifests/venus-backend.yaml,
+              # which does deploy into glueops-core.
+              - url: http://argocd-extension-backend-api.glueops-core-argocd-extension-backend.svc.cluster.local:8000

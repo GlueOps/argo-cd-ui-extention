@@ -13,15 +13,19 @@ NAMESPACE=${NAMESPACE:-argocd}
 # Default to the generic profile so the imperative default here MATCHES the
 # declarative default in the shared values (helm-values.yaml /
 # values/shared/otel-extension.yaml), both of which put the backend in $NAMESPACE
-# (argocd). The venus cluster runs the backend in glueops-core, so it overrides
-# via CLUSTER_PROFILE=venus here -- mirroring values/clusters/venus.yaml on the
+# (argocd). The venus cluster runs the backend elsewhere, so it overrides via
+# CLUSTER_PROFILE=venus here -- mirroring values/clusters/venus.yaml on the
 # GitOps side. Override OTEL_BACKEND_URL directly for anything else.
 CLUSTER_PROFILE=${CLUSTER_PROFILE:-default}
 
 # The backend Service can live in a DIFFERENT namespace than the argocd
-# control-plane: the venus profile runs it in glueops-core, not argocd.
+# control-plane. On venus the backend is deployed by the platform chart
+# (application-argocd-extension-backend.yaml), whose Application destination
+# namespace is glueops-core-argocd-extension-backend -- not glueops-core, and
+# not the argocd control-plane namespace. Keep this in sync with
+# values/clusters/venus.yaml.
 case "$CLUSTER_PROFILE" in
-  venus) DEFAULT_BACKEND_NAMESPACE="glueops-core" ;;
+  venus) DEFAULT_BACKEND_NAMESPACE="glueops-core-argocd-extension-backend" ;;
   *)     DEFAULT_BACKEND_NAMESPACE="$NAMESPACE" ;;
 esac
 _OTEL_BACKEND_URL_EXPLICIT=${OTEL_BACKEND_URL:+yes}
