@@ -1,9 +1,35 @@
 #!/bin/bash
 set -euo pipefail
 
+# PREREQUISITE: the backend now lives in GlueOps/argo-cd-extention-backend
+# (Service `argocd-extension-backend-api`, port 8000). This repo ships ONLY the
+# frontend bundle -- it no longer builds or deploys a backend. The backend MUST
+# be deployed BEFORE (or alongside) this extension, or `/api/links` has no target
+# and the panel renders nothing (the frontend fails silent by design; check the
+# browser console for `[otel-extension]` warnings). The `:8000` port below is the
+# contract owned by that repo's Service -- if it changes there, update it here and
+# in the values/*.yaml files.
 NAMESPACE=${NAMESPACE:-argocd}
+# Default to the generic profile so the imperative default here MATCHES the
+# declarative default in the shared values (helm-values.yaml /
+# values/shared/otel-extension.yaml), both of which put the backend in $NAMESPACE
+# (argocd). The venus cluster runs the backend elsewhere, so it overrides via
+# CLUSTER_PROFILE=venus here -- mirroring values/clusters/venus.yaml on the
+# GitOps side. Override OTEL_BACKEND_URL directly for anything else.
+CLUSTER_PROFILE=${CLUSTER_PROFILE:-default}
+
+# The backend Service can live in a DIFFERENT namespace than the argocd
+# control-plane. On venus the backend is deployed by the platform chart
+# (application-argocd-extension-backend.yaml), whose Application destination
+# namespace is glueops-core-argocd-extension-backend -- not glueops-core, and
+# not the argocd control-plane namespace. Keep this in sync with
+# values/clusters/venus.yaml.
+case "$CLUSTER_PROFILE" in
+  venus) DEFAULT_BACKEND_NAMESPACE="glueops-core-argocd-extension-backend" ;;
+  *)     DEFAULT_BACKEND_NAMESPACE="$NAMESPACE" ;;
+esac
 _OTEL_BACKEND_URL_EXPLICIT=${OTEL_BACKEND_URL:+yes}
-OTEL_BACKEND_URL=${OTEL_BACKEND_URL:-http://otel-extension-api.${NAMESPACE}.svc.cluster.local:8000}
+OTEL_BACKEND_URL=${OTEL_BACKEND_URL:-http://argocd-extension-backend-api.${DEFAULT_BACKEND_NAMESPACE}.svc.cluster.local:8000}
 
 if ! command -v kubectl >/dev/null 2>&1; then
   echo "kubectl is required"
@@ -16,10 +42,10 @@ if ! command -v npm >/dev/null 2>&1; then
 fi
 
 if [ -z "$_OTEL_BACKEND_URL_EXPLICIT" ]; then
-  echo "Checking otel-extension-api service exists"
-  if ! kubectl -n "$NAMESPACE" get service otel-extension-api >/dev/null 2>&1; then
-    echo "ERROR: Service 'otel-extension-api' not found in namespace '$NAMESPACE'."
-    echo "Deploy the backend first (e.g. via Helm) or set OTEL_BACKEND_URL to an existing service."
+  echo "Checking argocd-extension-backend-api service exists in namespace $DEFAULT_BACKEND_NAMESPACE"
+  if ! kubectl -n "$DEFAULT_BACKEND_NAMESPACE" get service argocd-extension-backend-api >/dev/null 2>&1; then
+    echo "ERROR: Service 'argocd-extension-backend-api' not found in namespace '$DEFAULT_BACKEND_NAMESPACE'."
+    echo "Deploy the backend first (from GlueOps/argo-cd-extention-backend) or set OTEL_BACKEND_URL to an existing service."
     exit 1
   fi
 fi

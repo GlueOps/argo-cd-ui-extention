@@ -1,8 +1,0 @@
-configs:
-  cm:
-    extension.config: |
-      extensions:
-        - name: otel-extension
-          backend:
-            services:
-              - url: http://grafana.monitoring.svc.cluster.local:3000
