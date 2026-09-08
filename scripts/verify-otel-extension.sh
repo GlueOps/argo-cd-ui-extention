@@ -1,9 +1,14 @@
 #!/bin/bash
 set -euo pipefail
 
-NAMESPACE=${NAMESPACE:-argocd}
-CLUSTER_PROFILE=${CLUSTER_PROFILE:-earth}
-EXPECTED_OTEL_BACKEND_URL=${EXPECTED_OTEL_BACKEND_URL:-http://otel-extension-api.${NAMESPACE}.svc.cluster.local:8000}
+# Defaults match a GlueOps captain cluster. argocd-server runs in glueops-core,
+# NOT a namespace called "argocd", and the extension's backend is deployed by the
+# platform chart (templates/application-argocd-extension-backend.yaml) into its own
+# namespace as the Service argocd-extension-backend-api.
+NAMESPACE=${NAMESPACE:-glueops-core}
+BACKEND_NAMESPACE=${BACKEND_NAMESPACE:-glueops-core-argocd-extension-backend}
+BACKEND_SERVICE=${BACKEND_SERVICE:-argocd-extension-backend-api}
+EXPECTED_OTEL_BACKEND_URL=${EXPECTED_OTEL_BACKEND_URL:-http://${BACKEND_SERVICE}.${BACKEND_NAMESPACE}.svc.cluster.local:8000}
 KUBE_CONTEXT=${KUBE_CONTEXT:-}
 
 if ! command -v kubectl >/dev/null 2>&1; then
@@ -18,7 +23,7 @@ fi
 current_context=$(kubectl config current-context)
 echo "Context: $current_context"
 echo "Namespace: $NAMESPACE"
-echo "Profile: $CLUSTER_PROFILE"
+echo "Backend:   $BACKEND_SERVICE.$BACKEND_NAMESPACE"
 
 pass_count=0
 fail_count=0
@@ -84,11 +89,11 @@ else
   fail "argocd-rbac-cm missing invoke permissions for otel-extension"
 fi
 
-# 7) backend service exists
-if kubectl -n "$NAMESPACE" get service otel-extension-api >/dev/null 2>&1; then
-  pass "otel-extension-api service exists"
+# 7) backend service exists (in its own namespace, not alongside argocd-server)
+if kubectl -n "$BACKEND_NAMESPACE" get service "$BACKEND_SERVICE" >/dev/null 2>&1; then
+  pass "$BACKEND_SERVICE service exists in $BACKEND_NAMESPACE"
 else
-  fail "otel-extension-api service not found"
+  fail "$BACKEND_SERVICE service not found in $BACKEND_NAMESPACE"
 fi
 
 echo
