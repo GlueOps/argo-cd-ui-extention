@@ -196,20 +196,40 @@
       });
   }
 
-  function useOtelData(application) {
-    var _React$useState = React.useState({
-      loading: true,
-      error: '',
-      categories: [],
-      lastUpdated: null,
-      config: readConfig()
-    });
-    var state = _React$useState[0];
-    var setState = _React$useState[1];
+  // Links are derived from the Application's identity and its deployment-config
+  // repo, so they are effectively static for the life of a page view. Argo CD
+  // remounts status-panel extensions whenever the Application object updates --
+  // with `timeout.reconciliation: 10s` in argocd-cm that is every ~10s -- and a
+  // remount resets useState, so without this cache every reconcile blanked the
+  // links behind "Loading links...". Keyed per application so switching apps
+  // never shows another app's links.
+  var linksCache = {};
+  var CACHE_TTL_MS = 5 * 60 * 1000;
 
+  function cacheKey(namespace, name) {
+    return namespace + '/' + name;
+  }
+
+  function useOtelData(application) {
     var appName = getApplicationName(application);
     var appNamespace = getApplicationNamespace(application);
     var projectName = getProjectName(application);
+    var key = cacheKey(appNamespace, appName);
+
+    // Lazy initializer: on a remount this renders the cached links immediately
+    // rather than flashing the loading state.
+    var _React$useState = React.useState(function() {
+      var cached = appName ? linksCache[key] : null;
+      return {
+        loading: !cached,
+        error: '',
+        categories: cached ? cached.categories : [],
+        lastUpdated: cached ? cached.lastUpdated : null,
+        config: readConfig()
+      };
+    });
+    var state = _React$useState[0];
+    var setState = _React$useState[1];
 
     React.useEffect(function() {
       if (!appName) {
@@ -219,23 +239,52 @@
         return;
       }
 
+      var cached = linksCache[key];
+      var fresh = cached && (Date.now() - cached.fetchedAt) < CACHE_TTL_MS;
+      if (fresh) {
+        // Nothing to do: the lazy initializer already rendered these links.
+        return;
+      }
+
       var active = true;
       var config = readConfig();
       var headers = buildHeaders(application);
 
-      setState(function(prev) {
-        return Object.assign({}, prev, { loading: true, error: '', config: config });
-      });
+      // Only blank the panel when there is nothing to show. A stale cache is
+      // revalidated silently, so the links stay on screen while it refetches.
+      if (!cached) {
+        setState(function(prev) {
+          return Object.assign({}, prev, { loading: true, error: '', config: config });
+        });
+      }
 
       fetchLinks(config, application, headers).then(function(result) {
         if (!active) {
           return;
         }
+        // fetchLinks swallows transport errors and resolves with an empty
+        // category list, so "empty" is indistinguishable from "backend down".
+        // Never let that replace links already on screen, and never cache it --
+        // leaving the entry untouched means the next remount retries instead of
+        // serving an empty panel for the whole TTL.
+        if (cached && cached.categories.length > 0 && result.categories.length === 0) {
+          setState(function(prev) {
+            return Object.assign({}, prev, { loading: false });
+          });
+          return;
+        }
+
+        var lastUpdated = result.lastUpdated || new Date().toISOString();
+        linksCache[key] = {
+          categories: result.categories,
+          lastUpdated: lastUpdated,
+          fetchedAt: Date.now()
+        };
         setState({
           loading: false,
           error: '',
           categories: result.categories,
-          lastUpdated: result.lastUpdated || new Date().toISOString(),
+          lastUpdated: lastUpdated,
           config: config
         });
       }).catch(function(err) {
@@ -243,6 +292,12 @@
           return;
         }
         setState(function(prev) {
+          // A failed background revalidation must not throw away links that are
+          // already on screen -- keep showing the stale set rather than
+          // replacing a working panel with "Observability unavailable".
+          if (cached) {
+            return Object.assign({}, prev, { loading: false });
+          }
           return Object.assign({}, prev, {
             loading: false,
             error: err && err.message ? err.message : 'Observability backend unavailable',
