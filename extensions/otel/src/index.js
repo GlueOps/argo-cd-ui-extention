@@ -350,7 +350,16 @@
           var links = category.links || [];
           var isSingleLink = links.length === 1;
           var forceExpandable = category.id === 'vault-secrets' || category.id === 'deployment-config';
-          var hasLinks = links.length > 0 && category.status === 'ok';
+          // Render whenever the backend gave us links. A 'degraded' category still
+          // carries working links -- it means a detail could not be confirmed (e.g.
+          // no Deployment exists, so the app name is used as the workload selector),
+          // not that the links are wrong. Gating on status === 'ok' hid every
+          // category except deployment-config, which is the only one the backend
+          // ever marks ok, so the panel rendered as a single Config Repo button.
+          var hasLinks = links.length > 0;
+          var degradedHint = category.status === 'degraded'
+            ? 'Best-effort: the exact workload could not be determined, so these links filter on the application name.'
+            : undefined;
 
           if (category.id === 'vault-secrets' && category.status === 'ok' && links.length === 0) {
             return React.createElement('span', {
@@ -382,6 +391,7 @@
               href: links[0].url,
               target: '_blank',
               rel: 'noopener noreferrer',
+              title: degradedHint,
               style: {
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -415,7 +425,7 @@
                 fontWeight: 500
               }
             },
-              React.createElement('summary', { style: { cursor: 'pointer', listStyle: 'none' } },
+              React.createElement('summary', { title: degradedHint, style: { cursor: 'pointer', listStyle: 'none' } },
                 category.icon ? React.createElement('span', { style: { marginRight: '4px' } }, category.icon) : null,
                 category.label,
                 React.createElement('span', { style: { marginLeft: '6px', fontSize: '9px' } }, '▼')
