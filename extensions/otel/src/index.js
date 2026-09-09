@@ -6,11 +6,49 @@
     requestTimeoutMs: 8000
   };
 
+  function toPositiveInt(value, fallback) {
+    var n = Number(value);
+    // Require a positive *integer*: a fractional value like 0.5 would make
+    // setTimeout(fn, 0.5) fire almost immediately -- the same near-instant-abort
+    // failure mode we reject NaN/invalid config for. Round down so a benign
+    // "8000.0" still works, then re-check it stayed positive (floor of a negative
+    // or NaN can't be > 0, so it falls back).
+    n = Math.floor(n);
+    return Number.isFinite(n) && n > 0 ? n : fallback;
+  }
+
+  // Only allow links to navigate to http(s) URLs or absolute same-origin paths
+  // (a single leading "/", e.g. "/foo"); bare relative paths and every other
+  // scheme are rejected. Backend-supplied URLs are untrusted; a `javascript:`/
+  // `data:` href would execute in the Argo CD origin (XSS) when clicked.
+  function safeHref(url) {
+    if (typeof url !== 'string') {
+      return null;
+    }
+    // Strip tab/newline/CR anywhere in the string BEFORE the scheme/path checks:
+    // the URL parser removes U+0009/U+000A/U+000D during parsing, so "/\t/evil.com"
+    // would pass the "single leading slash" test here yet resolve to the
+    // protocol-relative "//evil.com" (cross-origin) once the browser parses it.
+    var trimmed = url.replace(/[\t\n\r]/g, '').trim();
+    if (/^https?:\/\//i.test(trimmed)) {
+      return trimmed;
+    }
+    // Same-origin absolute path only. Reject a second "/" OR "\" after the
+    // leading slash: browsers normalize "\" to "/" for special schemes, so
+    // "/\evil.com" (and "//host") resolve cross-origin -- an open redirect.
+    if (/^\/(?![/\\])/.test(trimmed)) {
+      return trimmed;
+    }
+    return null;
+  }
+
   function readConfig() {
     var runtime = window.__OTEL_EXTENSION_CONFIG__ || {};
     return {
       extensionName: runtime.extensionName || DEFAULT_CONFIG.extensionName,
-      requestTimeoutMs: Number(runtime.requestTimeoutMs || DEFAULT_CONFIG.requestTimeoutMs)
+      // Guard against non-numeric config: Number('fast') -> NaN, and
+      // setTimeout(fn, NaN) fires immediately, aborting every request.
+      requestTimeoutMs: toPositiveInt(runtime.requestTimeoutMs, DEFAULT_CONFIG.requestTimeoutMs)
     };
   }
 
@@ -32,7 +70,13 @@
 
   // Logo shown in place of the old "OTEL" header. Overridable via runtime config
   // (window.__OTEL_EXTENSION_CONFIG__.logoUrl); defaults to the GlueOps GitHub avatar.
-  var GLUEOPS_LOGO_URL = (window.__OTEL_EXTENSION_CONFIG__ && window.__OTEL_EXTENSION_CONFIG__.logoUrl) || 'https://github.com/GlueOps.png';
+  // Run the override through safeHref as scheme hardening only: it rejects
+  // javascript:/data:/other non-http(s) schemes and scheme-relative ("//host")
+  // tricks, falling back to the default when unusable. NOTE: safeHref allows ANY
+  // http(s) host -- this is NOT a host allowlist, so a configured logoUrl can
+  // still load cross-origin, as the default github.com avatar already does.
+  var DEFAULT_LOGO_URL = 'https://github.com/GlueOps.png';
+  var GLUEOPS_LOGO_URL = safeHref(window.__OTEL_EXTENSION_CONFIG__ && window.__OTEL_EXTENSION_CONFIG__.logoUrl) || DEFAULT_LOGO_URL;
 
   // Detect the active Argo CD theme. Argo CD wraps its UI in a `.theme-dark` / `.theme-light`
   // element; fall back to the OS preference when neither is present.
@@ -65,7 +109,10 @@
       try {
         observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
         if (document.body) {
-          observer.observe(document.body, { attributes: true, attributeFilter: ['class'], subtree: true });
+          // Argo CD toggles the `theme-*` class on the root/body element. Observe
+          // only those two nodes' class attribute -- NOT the whole subtree, which
+          // would fire the callback on every unrelated DOM class change.
+          observer.observe(document.body, { attributes: true, attributeFilter: ['class'] });
         }
       } catch (err) {
         // Ignore observe failures.
@@ -347,7 +394,16 @@
       React.createElement('div', { style: { marginBottom: '8px', fontWeight: 600, fontSize: '12px', color: palette.heading } }, 'Context Links'),
       React.createElement('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } },
         categories.map(function(category, idx) {
-          var links = category.links || [];
+          if (!category || typeof category !== 'object') {
+            return null;
+          }
+          var rawLinks = Array.isArray(category.links) ? category.links : [];
+          // Backend-supplied URLs are untrusted. Only links that survive safeHref
+          // are renderable, and every downstream decision -- single-vs-dropdown,
+          // whether the category shows at all -- is based on THIS list, not the raw
+          // one. Otherwise a category whose links were all rejected would render an
+          // empty dropdown and keep the panel visible when it should have hidden.
+          var links = rawLinks.filter(function(link) { return link && safeHref(link.url); });
           var isSingleLink = links.length === 1;
           var forceExpandable = category.id === 'vault-secrets' || category.id === 'deployment-config';
           // Render whenever the backend gave us links. A 'degraded' category still
@@ -360,10 +416,13 @@
           var degradedHint = category.status === 'degraded'
             ? 'Best-effort: the exact workload could not be determined, so these links filter on the application name.'
             : undefined;
+          // Suffix the index so two categories sharing an id (or a missing id)
+          // cannot collide into the same React key.
+          var categoryKey = (category.id != null ? category.id : 'cat') + '-' + idx;
 
           if (category.id === 'vault-secrets' && category.status === 'ok' && links.length === 0) {
             return React.createElement('span', {
-              key: idx,
+              key: categoryKey,
               style: {
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -387,8 +446,8 @@
 
           if (isSingleLink && !forceExpandable) {
             return React.createElement('a', {
-              key: idx,
-              href: links[0].url,
+              key: categoryKey,
+              href: safeHref(links[0].url),
               target: '_blank',
               rel: 'noopener noreferrer',
               title: degradedHint,
@@ -412,7 +471,7 @@
             );
           }
 
-          return React.createElement('div', { key: idx, style: { position: 'relative' } },
+          return React.createElement('div', { key: categoryKey, style: { position: 'relative' } },
             React.createElement('details', {
               style: {
                 display: 'inline-flex',
@@ -434,7 +493,7 @@
               links.map(function(link, linkIdx) {
                 return React.createElement('a', {
                   key: linkIdx,
-                  href: link.url,
+                  href: safeHref(link.url),
                   target: '_blank',
                   rel: 'noopener noreferrer',
                   style: {
