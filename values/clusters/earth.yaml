@@ -1,8 +1,0 @@
-configs:
-  cm:
-    extension.config: |
-      extensions:
-        - name: otel-extension
-          backend:
-            services:
-              - url: https://grafana.nonprod.earth.onglueops.rocks
