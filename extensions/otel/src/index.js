@@ -6,11 +6,49 @@
     requestTimeoutMs: 8000
   };
 
+  function toPositiveInt(value, fallback) {
+    var n = Number(value);
+    // Require a positive *integer*: a fractional value like 0.5 would make
+    // setTimeout(fn, 0.5) fire almost immediately -- the same near-instant-abort
+    // failure mode we reject NaN/invalid config for. Round down so a benign
+    // "8000.0" still works, then re-check it stayed positive (floor of a negative
+    // or NaN can't be > 0, so it falls back).
+    n = Math.floor(n);
+    return Number.isFinite(n) && n > 0 ? n : fallback;
+  }
+
+  // Only allow links to navigate to http(s) URLs or absolute same-origin paths
+  // (a single leading "/", e.g. "/foo"); bare relative paths and every other
+  // scheme are rejected. Backend-supplied URLs are untrusted; a `javascript:`/
+  // `data:` href would execute in the Argo CD origin (XSS) when clicked.
+  function safeHref(url) {
+    if (typeof url !== 'string') {
+      return null;
+    }
+    // Strip tab/newline/CR anywhere in the string BEFORE the scheme/path checks:
+    // the URL parser removes U+0009/U+000A/U+000D during parsing, so "/\t/evil.com"
+    // would pass the "single leading slash" test here yet resolve to the
+    // protocol-relative "//evil.com" (cross-origin) once the browser parses it.
+    var trimmed = url.replace(/[\t\n\r]/g, '').trim();
+    if (/^https?:\/\//i.test(trimmed)) {
+      return trimmed;
+    }
+    // Same-origin absolute path only. Reject a second "/" OR "\" after the
+    // leading slash: browsers normalize "\" to "/" for special schemes, so
+    // "/\evil.com" (and "//host") resolve cross-origin -- an open redirect.
+    if (/^\/(?![/\\])/.test(trimmed)) {
+      return trimmed;
+    }
+    return null;
+  }
+
   function readConfig() {
     var runtime = window.__OTEL_EXTENSION_CONFIG__ || {};
     return {
       extensionName: runtime.extensionName || DEFAULT_CONFIG.extensionName,
-      requestTimeoutMs: Number(runtime.requestTimeoutMs || DEFAULT_CONFIG.requestTimeoutMs)
+      // Guard against non-numeric config: Number('fast') -> NaN, and
+      // setTimeout(fn, NaN) fires immediately, aborting every request.
+      requestTimeoutMs: toPositiveInt(runtime.requestTimeoutMs, DEFAULT_CONFIG.requestTimeoutMs)
     };
   }
 
@@ -32,7 +70,13 @@
 
   // Logo shown in place of the old "OTEL" header. Overridable via runtime config
   // (window.__OTEL_EXTENSION_CONFIG__.logoUrl); defaults to the GlueOps GitHub avatar.
-  var GLUEOPS_LOGO_URL = (window.__OTEL_EXTENSION_CONFIG__ && window.__OTEL_EXTENSION_CONFIG__.logoUrl) || 'https://github.com/GlueOps.png';
+  // Run the override through safeHref as scheme hardening only: it rejects
+  // javascript:/data:/other non-http(s) schemes and scheme-relative ("//host")
+  // tricks, falling back to the default when unusable. NOTE: safeHref allows ANY
+  // http(s) host -- this is NOT a host allowlist, so a configured logoUrl can
+  // still load cross-origin, as the default github.com avatar already does.
+  var DEFAULT_LOGO_URL = 'https://github.com/GlueOps.png';
+  var GLUEOPS_LOGO_URL = safeHref(window.__OTEL_EXTENSION_CONFIG__ && window.__OTEL_EXTENSION_CONFIG__.logoUrl) || DEFAULT_LOGO_URL;
 
   // Detect the active Argo CD theme. Argo CD wraps its UI in a `.theme-dark` / `.theme-light`
   // element; fall back to the OS preference when neither is present.
@@ -65,7 +109,10 @@
       try {
         observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
         if (document.body) {
-          observer.observe(document.body, { attributes: true, attributeFilter: ['class'], subtree: true });
+          // Argo CD toggles the `theme-*` class on the root/body element. Observe
+          // only those two nodes' class attribute -- NOT the whole subtree, which
+          // would fire the callback on every unrelated DOM class change.
+          observer.observe(document.body, { attributes: true, attributeFilter: ['class'] });
         }
       } catch (err) {
         // Ignore observe failures.
@@ -186,13 +233,19 @@
     var url = buildExtensionUrl(config.extensionName, '/api/links');
     return fetchJson(url, headers, config.requestTimeoutMs)
       .then(function(payload) {
+        var safe = payload && typeof payload === 'object' ? payload : {};
         return {
-          categories: Array.isArray(payload.categories) ? payload.categories : [],
-          lastUpdated: payload.metadata ? payload.metadata.last_updated : null
+          failed: false,
+          categories: Array.isArray(safe.categories) ? safe.categories : [],
+          lastUpdated: safe.metadata ? safe.metadata.last_updated : null
         };
       })
       .catch(function() {
-        return { categories: [], lastUpdated: null };
+        // Still resolve rather than reject -- callers depend on that -- but say
+        // so, since "the backend is not there" and "the backend says there are
+        // no links" need different handling: only the first should stop us
+        // calling again.
+        return { failed: true, categories: [], lastUpdated: null };
       });
   }
 
@@ -205,6 +258,21 @@
   // never shows another app's links.
   var linksCache = {};
   var CACHE_TTL_MS = 5 * 60 * 1000;
+
+  // Clusters that run the extension without its backend would otherwise call
+  // /api/links on every remount -- every ~10s per open application, all failing.
+  // One failure marks the backend absent and every later mount skips the call
+  // entirely until the window expires, so a backend-less cluster costs a single
+  // request per 5 minutes instead of one per reconcile. Module-level, not
+  // per-application: the backend is a cluster-wide service, so if it is missing
+  // for one app it is missing for all of them. Cleared as soon as a call
+  // succeeds, so the panel reappears on its own once the backend is deployed.
+  var backendDownUntil = 0;
+  var BACKEND_DOWN_TTL_MS = 5 * 60 * 1000;
+
+  function backendKnownDown() {
+    return Date.now() < backendDownUntil;
+  }
 
   function cacheKey(namespace, name) {
     return namespace + '/' + name;
@@ -221,7 +289,9 @@
     var _React$useState = React.useState(function() {
       var cached = appName ? linksCache[key] : null;
       return {
-        loading: !cached,
+        // Known-down backend starts settled, not loading: there is nothing to
+        // wait for, and StatusPanel renders null either way.
+        loading: !cached && !backendKnownDown(),
         error: '',
         categories: cached ? cached.categories : [],
         lastUpdated: cached ? cached.lastUpdated : null,
@@ -246,6 +316,16 @@
         return;
       }
 
+      // Backend known absent: skip /api/links entirely. Cached links, if any,
+      // stay on screen -- a backend that went away should not wipe links that
+      // are still useful -- but nothing new is requested until the window ends.
+      if (backendKnownDown()) {
+        setState(function(prev) {
+          return Object.assign({}, prev, { loading: false, error: '' });
+        });
+        return;
+      }
+
       var active = true;
       var config = readConfig();
       var headers = buildHeaders(application);
@@ -262,11 +342,24 @@
         if (!active) {
           return;
         }
-        // fetchLinks swallows transport errors and resolves with an empty
-        // category list, so "empty" is indistinguishable from "backend down".
-        // Never let that replace links already on screen, and never cache it --
-        // leaving the entry untouched means the next remount retries instead of
-        // serving an empty panel for the whole TTL.
+        // A failed call must never be cached as a result. Mark the backend
+        // absent so later mounts skip the request, keep whatever links are
+        // already on screen, and leave the positive cache untouched so the
+        // next attempt after the window is a real retry.
+        if (result.failed) {
+          backendDownUntil = Date.now() + BACKEND_DOWN_TTL_MS;
+          setState(function(prev) {
+            return Object.assign({}, prev, { loading: false, error: '' });
+          });
+          return;
+        }
+
+        // The call succeeded, so the backend is present: clear any earlier
+        // absence immediately rather than waiting out the window.
+        backendDownUntil = 0;
+
+        // A successful but empty response still must not replace links already
+        // on screen (the backend can transiently return nothing mid-sync).
         if (cached && cached.categories.length > 0 && result.categories.length === 0) {
           setState(function(prev) {
             return Object.assign({}, prev, { loading: false });
@@ -322,8 +415,27 @@
     var palette = getPalette(theme);
     var state = useOtelData(application);
 
-    if (!appName) {
-      return React.createElement('div', { style: { padding: '8px', fontSize: '12px', color: palette.muted } }, 'Application context not available');
+    // Render NOTHING unless there are real links to show. Previously this
+    // always returned the bordered panel with the GlueOps logo, so a cluster
+    // running the extension without its backend got a permanent empty box --
+    // and, because fetchLinks resolved an outage as "no categories", usually
+    // without even the "Observability unavailable" line to explain it.
+    //
+    // Returning null means the extension can be shipped fleet-wide ahead of (or
+    // entirely without) its backend: no panel appears until links actually
+    // exist, so a missing backend is indistinguishable from an application that
+    // simply has none. That is what makes the always-on rollout safe.
+    if (!appName || state.loading || state.error) {
+      return null;
+    }
+
+    // linksComponent returns null both when there are no categories at all and
+    // when every category was filtered out -- e.g. all links rejected by
+    // safeHref. Ask it first and bail on null, so an empty panel is impossible
+    // rather than merely unlikely.
+    var linksEl = linksComponent(state.categories, palette);
+    if (!linksEl) {
+      return null;
     }
 
     return React.createElement(
@@ -332,9 +444,7 @@
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', marginBottom: '8px' } },
         React.createElement(GlueOpsLogo, null)
       ),
-      state.loading && React.createElement('div', { style: { fontSize: '12px', color: palette.loading } }, 'Loading links...'),
-      !state.loading && state.error && React.createElement('div', { style: { fontSize: '12px', color: palette.warn } }, 'Observability unavailable'),
-      !state.loading && !state.error && linksComponent(state.categories, palette)
+      linksEl
     );
   }
 
@@ -347,14 +457,35 @@
       React.createElement('div', { style: { marginBottom: '8px', fontWeight: 600, fontSize: '12px', color: palette.heading } }, 'Context Links'),
       React.createElement('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } },
         categories.map(function(category, idx) {
-          var links = category.links || [];
+          if (!category || typeof category !== 'object') {
+            return null;
+          }
+          var rawLinks = Array.isArray(category.links) ? category.links : [];
+          // Backend-supplied URLs are untrusted. Only links that survive safeHref
+          // are renderable, and every downstream decision -- single-vs-dropdown,
+          // whether the category shows at all -- is based on THIS list, not the raw
+          // one. Otherwise a category whose links were all rejected would render an
+          // empty dropdown and keep the panel visible when it should have hidden.
+          var links = rawLinks.filter(function(link) { return link && safeHref(link.url); });
           var isSingleLink = links.length === 1;
           var forceExpandable = category.id === 'vault-secrets' || category.id === 'deployment-config';
-          var hasLinks = links.length > 0 && category.status === 'ok';
+          // Render whenever the backend gave us links. A 'degraded' category still
+          // carries working links -- it means a detail could not be confirmed (e.g.
+          // no Deployment exists, so the app name is used as the workload selector),
+          // not that the links are wrong. Gating on status === 'ok' hid every
+          // category except deployment-config, which is the only one the backend
+          // ever marks ok, so the panel rendered as a single Config Repo button.
+          var hasLinks = links.length > 0;
+          var degradedHint = category.status === 'degraded'
+            ? 'Best-effort: the exact workload could not be determined, so these links filter on the application name.'
+            : undefined;
+          // Suffix the index so two categories sharing an id (or a missing id)
+          // cannot collide into the same React key.
+          var categoryKey = (category.id != null ? category.id : 'cat') + '-' + idx;
 
           if (category.id === 'vault-secrets' && category.status === 'ok' && links.length === 0) {
             return React.createElement('span', {
-              key: idx,
+              key: categoryKey,
               style: {
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -378,10 +509,11 @@
 
           if (isSingleLink && !forceExpandable) {
             return React.createElement('a', {
-              key: idx,
-              href: links[0].url,
+              key: categoryKey,
+              href: safeHref(links[0].url),
               target: '_blank',
               rel: 'noopener noreferrer',
+              title: degradedHint,
               style: {
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -402,7 +534,7 @@
             );
           }
 
-          return React.createElement('div', { key: idx, style: { position: 'relative' } },
+          return React.createElement('div', { key: categoryKey, style: { position: 'relative' } },
             React.createElement('details', {
               style: {
                 display: 'inline-flex',
@@ -415,7 +547,7 @@
                 fontWeight: 500
               }
             },
-              React.createElement('summary', { style: { cursor: 'pointer', listStyle: 'none' } },
+              React.createElement('summary', { title: degradedHint, style: { cursor: 'pointer', listStyle: 'none' } },
                 category.icon ? React.createElement('span', { style: { marginRight: '4px' } }, category.icon) : null,
                 category.label,
                 React.createElement('span', { style: { marginLeft: '6px', fontSize: '9px' } }, '▼')
@@ -424,7 +556,7 @@
               links.map(function(link, linkIdx) {
                 return React.createElement('a', {
                   key: linkIdx,
-                  href: link.url,
+                  href: safeHref(link.url),
                   target: '_blank',
                   rel: 'noopener noreferrer',
                   style: {
