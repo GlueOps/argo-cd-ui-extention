@@ -233,13 +233,19 @@
     var url = buildExtensionUrl(config.extensionName, '/api/links');
     return fetchJson(url, headers, config.requestTimeoutMs)
       .then(function(payload) {
+        var safe = payload && typeof payload === 'object' ? payload : {};
         return {
-          categories: Array.isArray(payload.categories) ? payload.categories : [],
-          lastUpdated: payload.metadata ? payload.metadata.last_updated : null
+          failed: false,
+          categories: Array.isArray(safe.categories) ? safe.categories : [],
+          lastUpdated: safe.metadata ? safe.metadata.last_updated : null
         };
       })
       .catch(function() {
-        return { categories: [], lastUpdated: null };
+        // Still resolve rather than reject -- callers depend on that -- but say
+        // so, since "the backend is not there" and "the backend says there are
+        // no links" need different handling: only the first should stop us
+        // calling again.
+        return { failed: true, categories: [], lastUpdated: null };
       });
   }
 
@@ -252,6 +258,21 @@
   // never shows another app's links.
   var linksCache = {};
   var CACHE_TTL_MS = 5 * 60 * 1000;
+
+  // Clusters that run the extension without its backend would otherwise call
+  // /api/links on every remount -- every ~10s per open application, all failing.
+  // One failure marks the backend absent and every later mount skips the call
+  // entirely until the window expires, so a backend-less cluster costs a single
+  // request per 5 minutes instead of one per reconcile. Module-level, not
+  // per-application: the backend is a cluster-wide service, so if it is missing
+  // for one app it is missing for all of them. Cleared as soon as a call
+  // succeeds, so the panel reappears on its own once the backend is deployed.
+  var backendDownUntil = 0;
+  var BACKEND_DOWN_TTL_MS = 5 * 60 * 1000;
+
+  function backendKnownDown() {
+    return Date.now() < backendDownUntil;
+  }
 
   function cacheKey(namespace, name) {
     return namespace + '/' + name;
@@ -268,7 +289,9 @@
     var _React$useState = React.useState(function() {
       var cached = appName ? linksCache[key] : null;
       return {
-        loading: !cached,
+        // Known-down backend starts settled, not loading: there is nothing to
+        // wait for, and StatusPanel renders null either way.
+        loading: !cached && !backendKnownDown(),
         error: '',
         categories: cached ? cached.categories : [],
         lastUpdated: cached ? cached.lastUpdated : null,
@@ -293,6 +316,16 @@
         return;
       }
 
+      // Backend known absent: skip /api/links entirely. Cached links, if any,
+      // stay on screen -- a backend that went away should not wipe links that
+      // are still useful -- but nothing new is requested until the window ends.
+      if (backendKnownDown()) {
+        setState(function(prev) {
+          return Object.assign({}, prev, { loading: false, error: '' });
+        });
+        return;
+      }
+
       var active = true;
       var config = readConfig();
       var headers = buildHeaders(application);
@@ -309,11 +342,24 @@
         if (!active) {
           return;
         }
-        // fetchLinks swallows transport errors and resolves with an empty
-        // category list, so "empty" is indistinguishable from "backend down".
-        // Never let that replace links already on screen, and never cache it --
-        // leaving the entry untouched means the next remount retries instead of
-        // serving an empty panel for the whole TTL.
+        // A failed call must never be cached as a result. Mark the backend
+        // absent so later mounts skip the request, keep whatever links are
+        // already on screen, and leave the positive cache untouched so the
+        // next attempt after the window is a real retry.
+        if (result.failed) {
+          backendDownUntil = Date.now() + BACKEND_DOWN_TTL_MS;
+          setState(function(prev) {
+            return Object.assign({}, prev, { loading: false, error: '' });
+          });
+          return;
+        }
+
+        // The call succeeded, so the backend is present: clear any earlier
+        // absence immediately rather than waiting out the window.
+        backendDownUntil = 0;
+
+        // A successful but empty response still must not replace links already
+        // on screen (the backend can transiently return nothing mid-sync).
         if (cached && cached.categories.length > 0 && result.categories.length === 0) {
           setState(function(prev) {
             return Object.assign({}, prev, { loading: false });
@@ -369,8 +415,27 @@
     var palette = getPalette(theme);
     var state = useOtelData(application);
 
-    if (!appName) {
-      return React.createElement('div', { style: { padding: '8px', fontSize: '12px', color: palette.muted } }, 'Application context not available');
+    // Render NOTHING unless there are real links to show. Previously this
+    // always returned the bordered panel with the GlueOps logo, so a cluster
+    // running the extension without its backend got a permanent empty box --
+    // and, because fetchLinks resolved an outage as "no categories", usually
+    // without even the "Observability unavailable" line to explain it.
+    //
+    // Returning null means the extension can be shipped fleet-wide ahead of (or
+    // entirely without) its backend: no panel appears until links actually
+    // exist, so a missing backend is indistinguishable from an application that
+    // simply has none. That is what makes the always-on rollout safe.
+    if (!appName || state.loading || state.error) {
+      return null;
+    }
+
+    // linksComponent returns null both when there are no categories at all and
+    // when every category was filtered out -- e.g. all links rejected by
+    // safeHref. Ask it first and bail on null, so an empty panel is impossible
+    // rather than merely unlikely.
+    var linksEl = linksComponent(state.categories, palette);
+    if (!linksEl) {
+      return null;
     }
 
     return React.createElement(
@@ -379,9 +444,7 @@
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', marginBottom: '8px' } },
         React.createElement(GlueOpsLogo, null)
       ),
-      state.loading && React.createElement('div', { style: { fontSize: '12px', color: palette.loading } }, 'Loading links...'),
-      !state.loading && state.error && React.createElement('div', { style: { fontSize: '12px', color: palette.warn } }, 'Observability unavailable'),
-      !state.loading && !state.error && linksComponent(state.categories, palette)
+      linksEl
     );
   }
 
